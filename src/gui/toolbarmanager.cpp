@@ -24,7 +24,9 @@
 #include <gui/fywidget.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
+#include <gui/guiutils.h>
 #include <gui/layout/editablelayout.h>
+#include <gui/theme/fytheme.h>
 #include <gui/widgetprovider.h>
 #include <utils/actions/actioncontainer.h>
 #include <utils/actions/actionmanager.h>
@@ -42,6 +44,8 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QToolBar>
+
+#include <limits>
 
 using namespace Qt::StringLiterals;
 
@@ -71,6 +75,14 @@ ToolbarManager::ToolbarManager(QMainWindow* window, QMenuBar* menuBar, ActionMan
     , m_editing{false}
 {
     qApp->installEventFilter(this);
+    m_menuPaletteTimer.setSingleShot(true);
+    QObject::connect(&m_menuPaletteTimer, &QTimer::timeout, this, &ToolbarManager::updateMenuPalette);
+    m_settings->subscribe<Settings::Gui::ResolvedAppStyle>(this,
+                                                           [this](const QVariant&) { m_menuPaletteTimer.start(); });
+    m_settings->subscribe<Settings::Gui::CustomTheme>(this, [this](const QVariant&) {
+        if(m_settings->value<Settings::Gui::CustomTheme>().value<FyTheme>().colours.isEmpty())
+            clearMenuPalette();
+    });
 
     m_menuToolbar->setObjectName(u"MenuToolbar"_s);
     m_menuToolbar->setFloatable(true);
@@ -276,6 +288,14 @@ void ToolbarManager::setMenuVisible(bool visible)
 
 bool ToolbarManager::eventFilter(QObject* watched, QEvent* event)
 {
+    if((watched == qApp && event->type() == QEvent::ApplicationPaletteChange)
+       || (watched == m_menuBar
+           && (event->type() == QEvent::StyleChange || event->type() == QEvent::Polish
+               || event->type() == QEvent::ParentChange
+               || (event->type() == QEvent::PaletteChange && m_customMenuPalette && !m_applyingMenuPalette)))) {
+        m_menuPaletteTimer.start();
+    }
+
     if(event->type() == QEvent::ContextMenu) {
         auto* contextMenuEvent = static_cast<QContextMenuEvent*>(event);
         if(auto* toolbar = toolbarFor(watched)) {
@@ -328,6 +348,7 @@ void ToolbarManager::setMenuInToolbar(bool inToolbar)
         }
     }
     updateMenuVisibility();
+    m_menuPaletteTimer.start();
 }
 
 void ToolbarManager::setToolbarsLocked(bool locked)
@@ -353,6 +374,38 @@ void ToolbarManager::updateMenuVisibility()
 {
     m_menuBar->setVisible(m_menuVisible);
     m_menuToolbar->setVisible(m_menuVisible && m_menuInToolbar);
+}
+
+void ToolbarManager::updateMenuPalette()
+{
+    const auto theme         = m_settings->value<Settings::Gui::CustomTheme>().value<FyTheme>();
+    const auto resolvedStyle = m_settings->value<Settings::Gui::ResolvedAppStyle>().value<ResolvedAppStyle>();
+    if(!theme.colours.isEmpty() && resolvedStyle.revision > 0
+       && Gui::styleSupportsCustomPalette(QApplication::style()->name())) {
+        auto palette = resolvedStyle.palette;
+        palette.setResolveMask(std::numeric_limits<QPalette::ResolveMask>::max());
+        m_customMenuPalette   = palette;
+        m_applyingMenuPalette = true;
+        const QPointer<ToolbarManager> lifetime{this};
+        m_menuBar->setPalette(palette);
+        if(lifetime)
+            m_applyingMenuPalette = false;
+    }
+    else {
+        clearMenuPalette();
+    }
+}
+
+void ToolbarManager::clearMenuPalette()
+{
+    auto customMenuPalette = std::exchange(m_customMenuPalette, std::nullopt);
+    if(!customMenuPalette)
+        return;
+    const auto currentPalette = m_menuBar->palette();
+    customMenuPalette->setCurrentColorGroup(currentPalette.currentColorGroup());
+    if(currentPalette.resolveMask() == customMenuPalette->resolveMask() && currentPalette == *customMenuPalette) {
+        m_menuBar->setPalette(QPalette{});
+    }
 }
 
 void ToolbarManager::addToolbar(const QString& key, const QString& id, const QJsonObject& layout)

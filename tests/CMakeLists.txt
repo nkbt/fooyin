@@ -227,3 +227,16 @@ if(TARGET cdda)
     )
     target_include_directories(test_cddadecoder PRIVATE ${CMAKE_SOURCE_DIR}/src/plugins/cdda)
 endif()
+
+# Exercise the private toolbar owner without expanding its exported ABI.
+add_executable(
+    test_menupalette
+    gui/menupalettetest.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/toolbarmanager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/menuheader.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/theme/fytheme.cpp
+)
+fooyin_set_rpath(test_menupalette ${LIB_INSTALL_DIR})
+target_include_directories(test_menupalette PRIVATE ${CMAKE_SOURCE_DIR}/src/gui)
+target_link_libraries(test_menupalette PRIVATE Fooyin::Gui Fooyin::GuiPrivate Fooyin::Utils Qt6::Test)
+add_test(NAME MenuPalette COMMAND test_menupalette)

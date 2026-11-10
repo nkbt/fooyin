@@ -22,9 +22,12 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QObject>
+#include <QPalette>
 #include <QPointer>
 #include <QSizePolicy>
+#include <QTimer>
 
+#include <optional>
 #include <vector>
 
 class QMainWindow;
@@ -84,6 +87,8 @@ private:
     void setToolbarsLocked(bool locked);
 
     void updateMenuVisibility();
+    void updateMenuPalette();
+    void clearMenuPalette();
 
     void addToolbar(const QString& key, const QString& id = {}, const QJsonObject& layout = {});
     QToolBar* createToolbar(const QString& title, const QString& id);
@@ -109,6 +114,9 @@ private:
 
     QMainWindow* m_window;
     QMenuBar* m_menuBar;
+    QTimer m_menuPaletteTimer;
+    std::optional<QPalette> m_customMenuPalette;
+    bool m_applyingMenuPalette{false};
     WidgetProvider* m_widgetProvider;
     SettingsManager* m_settings;
     QToolBar* m_menuToolbar;
