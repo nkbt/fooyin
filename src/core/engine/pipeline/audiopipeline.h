@@ -297,6 +297,7 @@ public:
     void setSignalWakeTarget(QObject* target, int wakeEventType = 0);
     //! Set optional analysis bus tap for post-master processed PCM.
     void setAnalysisBus(AudioAnalysisBus* analysisBus);
+    void setSourceOutputHandler(std::function<void(StreamId, uint64_t)> handler);
     //! Set pull-visualisation PCM tap before output volume and transport fades.
     void setVisualisationAnalysisBus(AudioAnalysisBus* analysisBus);
     //! Drain and clear pending level-triggered signals on engine thread.
@@ -483,6 +484,9 @@ private:
     }
 
     void clearPendingSignals(uint32_t signalMask);
+    std::function<void(StreamId, uint64_t)> m_sourceOutputHandler;
+    StreamId m_lastConfirmedStreamId{InvalidStreamId};
+    uint64_t m_lastConfirmedEpoch{0};
     void resetQueuedNotifications(bool resetWakeState);
     void markPendingSignal(PendingSignal signal);
 

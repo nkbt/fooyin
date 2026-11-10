@@ -397,6 +397,11 @@ AudioEngine::AudioEngine(std::shared_ptr<AudioLoader> audioLoader, SettingsManag
     QObject::connect(
         &m_audioClock, &AudioClock::positionChanged, this, [this](uint64_t positionMs, uint64_t generation) {
             if(generation == m_positionContextTrackGeneration) {
+                if(m_playbackOccurrence && m_playbackOccurrence->generation == generation) {
+                    m_playbackOccurrence->positionMs    = positionMs;
+                    m_playbackOccurrence->seekRequestId = m_positionContextSeekRequestId;
+                    Q_EMIT playbackOccurrenceUpdated(*m_playbackOccurrence);
+                }
                 Q_EMIT positionChanged(positionMs);
                 Q_EMIT positionChangedWithContext(positionMs, m_positionContextTrackGeneration,
                                                   m_positionContextTimelineEpoch, m_positionContextSeekRequestId);
@@ -423,6 +428,11 @@ AudioEngine::AudioEngine(std::shared_ptr<AudioLoader> audioLoader, SettingsManag
     m_visualisationAnalysisBus = std::make_unique<AudioAnalysisBus>();
     m_visualisationAnalysisBus->setPcmReadyHandler(this, &AudioEngine::onVisualisationPcmFrameReady);
 
+    m_pipeline.setSourceOutputHandler([this](StreamId streamId, uint64_t sourcePositionMs) {
+        QMetaObject::invokeMethod(
+            this, [this, streamId, sourcePositionMs]() { confirmSourceOutput(streamId, sourcePositionMs); },
+            Qt::QueuedConnection);
+    });
     m_pipeline.start();
     m_pipeline.setAutomaticResampling(m_settings->value<Settings::Core::Internal::OutputAutoResample>(),
                                       m_settings->value<Settings::Core::Internal::OutputResamplerPreference>());
@@ -1145,7 +1155,9 @@ void AudioEngine::play()
     if(m_pausedStreamSuspended) {
         m_pausedStreamSuspended = false;
         if(m_currentTrack.isValid()) {
+            m_preservePlaybackOccurrence = true;
             loadTrack(currentPlaybackItem(), false);
+            m_preservePlaybackOccurrence = false;
             play();
         }
         return;
@@ -1310,6 +1322,12 @@ void AudioEngine::stop()
 
 void AudioEngine::stopImmediate()
 {
+    const auto status = m_pipeline.currentStatus();
+    if(status.renderedSegment.valid && status.renderedSegment.outputFrames > 0) {
+        confirmSourceOutput(status.renderedSegment.streamId, status.renderedSegment.sourceEndMs);
+    }
+    endPlaybackOccurrence(false);
+    m_committedPlaybackGeneration = 0;
     clearPendingAudiblePause();
     m_pausedStreamSuspended = false;
     clearInputBufferingState(false);
@@ -3380,6 +3398,56 @@ Engine::TrackCommitContext AudioEngine::makeTrackCommitContext(const Engine::Tra
     };
 }
 
+void AudioEngine::endPlaybackOccurrence(bool failed)
+{
+    if(!m_playbackOccurrence) {
+        return;
+    }
+    auto context = *m_playbackOccurrence;
+    m_playbackOccurrence.reset();
+    if(context.generation == m_trackGeneration) {
+        context.positionMs = m_audioClock.position();
+    }
+    context.failed = failed;
+    Q_EMIT playbackOccurrenceEnded(context);
+}
+
+void AudioEngine::commitPlaybackOccurrence()
+{
+    if(m_playbackOccurrence
+       && (m_playbackOccurrence->generation != m_trackGeneration
+           || m_playbackOccurrence->sourceGeneration != m_decoder.sourceGeneration())) {
+        endPlaybackOccurrence(false);
+    }
+    m_committedPlaybackGeneration = m_trackGeneration;
+    const auto status             = m_pipeline.currentStatus();
+    if(status.renderedSegment.valid && status.renderedSegment.outputFrames > 0) {
+        confirmSourceOutput(status.renderedSegment.streamId, status.renderedSegment.sourceEndMs);
+    }
+}
+
+void AudioEngine::confirmSourceOutput(StreamId streamId, uint64_t sourcePositionMs)
+{
+    const auto stream = currentTrackTimingStream();
+    if(m_committedPlaybackGeneration != m_trackGeneration || !stream || stream->id() != streamId
+       || streamId == InvalidStreamId || !m_currentTrack.isValid() || playbackState() != Engine::PlaybackState::Playing
+       || m_playbackOccurrence) {
+        return;
+    }
+    m_playbackOccurrence = Engine::PlaybackOccurrenceContext{
+        .track                = m_currentTrack,
+        .playbackOccurrenceId = ++m_nextPlaybackOccurrenceId,
+        .sourceGeneration     = m_decoder.sourceGeneration(),
+        .itemId               = m_currentTrackItemId,
+        .generation           = m_trackGeneration,
+        .positionMs = relativeTrackPositionMs(sourcePositionMs, m_streamToTrackOriginMs, m_currentTrack.offset()),
+        .paused     = false,
+        .seekable   = m_decoder.isSeekable(),
+        .failed     = false,
+    };
+    Q_EMIT playbackOccurrenceStarted(*m_playbackOccurrence);
+}
+
 void AudioEngine::clearPendingAudibleTrackCommit()
 {
     m_pendingAudibleTrackCommit = {};
@@ -3398,6 +3466,7 @@ void AudioEngine::finaliseTrackCommitCleanup()
 void AudioEngine::finaliseTrackCommit(const Engine::TransitionMode mode, const uint64_t audibleDelayMs)
 {
     finaliseTrackCommitCleanup();
+    commitPlaybackOccurrence();
     publishPlaybackOutputInfo();
     Q_EMIT trackCommitted(makeTrackCommitContext(mode, audibleDelayMs));
 }
@@ -3435,6 +3504,7 @@ void AudioEngine::maybeEmitPendingAudibleTrackCommit(const StreamId audibleOutpu
     qCDebug(ENGINE) << "Deferred track commit released after prepared stream became audible:"
                     << "trackId=" << context.track.id() << "itemId=" << context.itemId
                     << "generation=" << context.generation << "streamId=" << audibleOutputStreamId;
+    commitPlaybackOccurrence();
     publishPlaybackOutputInfo();
     Q_EMIT trackCommitted(context);
 }
@@ -3813,6 +3883,9 @@ void AudioEngine::updatePosition()
     const uint64_t pipelineDelayMs  = m_pipeline.playbackDelayMs();
     const double delayToSourceScale = m_pipeline.playbackDelayToTrackScale();
     const auto pipelineStatus       = m_pipeline.currentStatus();
+    if(pipelineStatus.renderedSegment.valid && pipelineStatus.renderedSegment.outputFrames > 0) {
+        confirmSourceOutput(pipelineStatus.renderedSegment.streamId, pipelineStatus.renderedSegment.sourceEndMs);
+    }
     const bool preparedCrossfadeArmed
         = m_preparedCrossfadeTransition.active && m_preparedCrossfadeTransition.sourceGeneration == m_trackGeneration;
 
@@ -4527,6 +4600,15 @@ void AudioEngine::updatePlaybackState(Engine::PlaybackState state)
                 m_audioClock.setStopped();
                 break;
         }
+        if(m_playbackOccurrence && m_playbackOccurrence->generation == m_trackGeneration
+           && (state == Engine::PlaybackState::Paused || state == Engine::PlaybackState::Playing)) {
+            m_playbackOccurrence->paused     = state == Engine::PlaybackState::Paused;
+            m_playbackOccurrence->positionMs = m_audioClock.position();
+            Q_EMIT playbackOccurrenceUpdated(*m_playbackOccurrence);
+        }
+        if(state == Engine::PlaybackState::Error) {
+            endPlaybackOccurrence(true);
+        }
         Q_EMIT stateChanged(state);
     }
 
@@ -4535,6 +4617,10 @@ void AudioEngine::updatePlaybackState(Engine::PlaybackState state)
 
 void AudioEngine::updateTrackStatus(Engine::TrackStatus status, bool flushDspOnEnd)
 {
+    if((status == Engine::TrackStatus::Invalid || status == Engine::TrackStatus::Unreadable) && m_playbackOccurrence
+       && m_playbackOccurrence->generation == m_trackGeneration) {
+        endPlaybackOccurrence(true);
+    }
     const auto prevStatus = m_trackStatus.exchange(status, std::memory_order_relaxed);
     const bool seekable   = m_decoder.isValid() && m_decoder.isSeekable();
     if(prevStatus != status) {
@@ -4845,10 +4931,19 @@ bool AudioEngine::isAutoTransitionEligible(const Track& track) const
 
 void AudioEngine::setCurrentTrackContext(const Engine::PlaybackItem& item)
 {
-    m_currentTrack       = item.track;
-    m_currentTrackItemId = item.itemId;
+    if(m_playbackOccurrence && m_playbackOccurrence->generation == m_trackGeneration) {
+        m_playbackOccurrence->positionMs = m_audioClock.position();
+    }
+    m_committedPlaybackGeneration = 0;
+    m_currentTrack                = item.track;
+    m_currentTrackItemId          = item.itemId;
     updateAutoCrossfadeAlbumMatch();
     ++m_trackGeneration;
+    if(m_playbackOccurrence && (m_preservePlaybackOccurrence || item.itemId != 0)
+       && m_playbackOccurrence->itemId == item.itemId
+       && m_playbackOccurrence->track.filepath() == item.track.filepath()) {
+        m_playbackOccurrence->generation = m_trackGeneration;
+    }
     m_lastAppliedSeekRequestId = 0;
     m_lastVbrUpdateAt          = {};
     m_positionCoordinator.resetContinuity();
@@ -5555,6 +5650,12 @@ void AudioEngine::executeFullReinitLoad(const Engine::PlaybackItem& item, bool m
     const Track& track = item.track;
     qCDebug(ENGINE) << "Loading track:" << track.filenameExt();
 
+    const bool preservesOccurrence = m_playbackOccurrence && (m_preservePlaybackOccurrence || item.itemId != 0)
+                                  && m_playbackOccurrence->itemId == item.itemId
+                                  && m_playbackOccurrence->track.filepath() == item.track.filepath();
+    if(!preservesOccurrence) {
+        endPlaybackOccurrence(false);
+    }
     clearAutoCrossfadeTailFadeState();
     clearAutoBoundaryFadeState(true);
     clearPendingAnalysisData();

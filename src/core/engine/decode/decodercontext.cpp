@@ -136,6 +136,11 @@ bool DecoderContext::isSeekable() const
     return m_decoder && m_decoder->isSeekable();
 }
 
+uint64_t DecoderContext::sourceGeneration() const
+{
+    return m_decoder ? m_decoder->sourceGeneration() : 0;
+}
+
 bool DecoderContext::allowsConcurrentDecoding() const
 {
     return !m_decoder || m_decoder->allowsConcurrentDecoding();

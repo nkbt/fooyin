@@ -221,6 +221,7 @@ public:
      * @note Called only after `init()` succeeds.
      */
     [[nodiscard]] virtual bool isSeekable() const = 0;
+    [[nodiscard]] virtual uint64_t sourceGeneration() const;
     /*!
      * Returns whether this decoder may read while another decoder instance is active.
      * Base implementation returns true.

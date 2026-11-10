@@ -108,6 +108,11 @@ EngineHandler::EngineHandler(std::shared_ptr<AudioLoader> audioLoader, PlayerCon
                                                                      .remainingOutputMs    = remainingOutputMs,
                                                                      .engineOwnsTransition = engineOwnsTransition});
         });
+    QObject::connect(m_engine, &AudioEngine::playbackOccurrenceStarted, this,
+                     &EngineHandler::playbackOccurrenceStarted);
+    QObject::connect(m_engine, &AudioEngine::playbackOccurrenceUpdated, this,
+                     &EngineHandler::playbackOccurrenceUpdated);
+    QObject::connect(m_engine, &AudioEngine::playbackOccurrenceEnded, this, &EngineHandler::playbackOccurrenceEnded);
     QObject::connect(m_engine, &AudioEngine::finished, this, &EngineHandler::finished);
     QObject::connect(m_engine, &AudioEngine::positionContextChanged, this, &EngineHandler::handlePositionContext);
     QObject::connect(m_engine, &AudioEngine::positionChangedWithContext, this, &EngineHandler::handlePositionSample);

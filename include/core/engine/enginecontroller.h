@@ -115,6 +115,13 @@ Q_SIGNALS:
     //! Result of async prepared-gapless arm attempt for a specific boundary generation.
     void preparedGaplessArmResult(const Fooyin::Engine::PlaybackItem& item, uint64_t generation, bool armed);
 
+    //! Emitted when playback starts for a source occurrence.
+    void playbackOccurrenceStarted(const Fooyin::Engine::PlaybackOccurrenceContext& context);
+    //! Position, pause and seek updates for the current source occurrence.
+    void playbackOccurrenceUpdated(const Fooyin::Engine::PlaybackOccurrenceContext& context);
+    //! Emitted when a started source occurrence ends or fails.
+    void playbackOccurrenceEnded(const Fooyin::Engine::PlaybackOccurrenceContext& context);
+
     //! Emitted after stop teardown completes.
     void finished();
 };

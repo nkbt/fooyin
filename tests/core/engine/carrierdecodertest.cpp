@@ -35,6 +35,11 @@ public:
         return {u"pcm"_s};
     }
 
+    uint64_t sourceGeneration() const override
+    {
+        return 613;
+    }
+
     bool isSeekable() const override
     {
         return true;
@@ -126,6 +131,7 @@ TEST(CarrierDecoderTest, PreservesOrdinaryPcmAfterBoundedProbe)
     CarrierDecoder decoder{std::make_unique<PcmDecoder>(pcm)};
     const auto format = decoder.init({}, {}, AudioDecoder::None);
     ASSERT_TRUE(format);
+    EXPECT_EQ(decoder.sourceGeneration(), 613U);
     EXPECT_EQ(*format, AudioFormat(SampleFormat::S16, 44'100, 2));
 
     decoder.start();
@@ -141,6 +147,7 @@ TEST(CarrierDecoderTest, DecodesContentDetectedEncodedAudio)
     CarrierDecoder decoder{std::make_unique<PcmDecoder>(encoded)};
     const auto format = decoder.init({}, {}, AudioDecoder::None);
     ASSERT_TRUE(format);
+    EXPECT_EQ(decoder.sourceGeneration(), 613U);
     EXPECT_EQ(format->sampleRate(), 48'000);
     EXPECT_EQ(format->channelCount(), 2);
 
@@ -149,5 +156,6 @@ TEST(CarrierDecoderTest, DecodesContentDetectedEncodedAudio)
     ASSERT_EQ(result.status, AudioDecoder::ReadStatus::DecodedAudio);
     EXPECT_TRUE(result.buffer.isValid());
     EXPECT_EQ(result.buffer.format(), *format);
+    EXPECT_EQ(decoder.sourceGeneration(), 613U);
 }
 } // namespace Fooyin::Testing

@@ -1085,6 +1085,11 @@ void AudioPipeline::setSignalWakeTarget(QObject* target, int wakeEventType)
     m_signalMailbox.setWakeTarget(target, wakeEventType);
 }
 
+void AudioPipeline::setSourceOutputHandler(std::function<void(StreamId, uint64_t)> handler)
+{
+    m_sourceOutputHandler = std::move(handler);
+}
+
 void AudioPipeline::setAnalysisBus(AudioAnalysisBus* analysisBus)
 {
     m_analysisBus.store(analysisBus, std::memory_order_release);
@@ -1912,6 +1917,13 @@ bool AudioPipeline::drainPendingOutput(const OutputState& state, int& freeFrames
                                   << "pendingEndOffset=" << pendingEndOffset << "writtenFrames=" << pendingWritten;
             }
 
+            if(m_sourceOutputHandler
+               && (m_lastConfirmedStreamId != endOffsetInfo->streamId
+                   || m_lastConfirmedEpoch != endOffsetInfo->epoch)) {
+                m_lastConfirmedStreamId = endOffsetInfo->streamId;
+                m_lastConfirmedEpoch    = endOffsetInfo->epoch;
+                m_sourceOutputHandler(endOffsetInfo->streamId, endOffsetInfo->positionMs);
+            }
             m_timelineUnit.setCycleMappedPosition(endOffsetInfo->positionMs);
             m_timelineUnit.setCycleRenderedSegment({
                 .valid        = true,

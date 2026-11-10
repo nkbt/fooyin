@@ -243,6 +243,11 @@ bool CarrierDecoder::isSeekable() const
     return p->primary->isSeekable();
 }
 
+uint64_t CarrierDecoder::sourceGeneration() const
+{
+    return p->primary->sourceGeneration();
+}
+
 bool CarrierDecoder::allowsConcurrentDecoding() const
 {
     return p->primary->allowsConcurrentDecoding();
