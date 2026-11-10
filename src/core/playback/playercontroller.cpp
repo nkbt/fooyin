@@ -1690,8 +1690,7 @@ void PlayerController::setCurrentPosition(uint64_t ms)
 {
     const PlaybackProgressTracker::PositionUpdate update = p->m_progressTracker.updatePosition(ms);
 
-    if(update.reachedPlayedThreshold && p->m_session.currentTrack().isValid()
-       && !p->m_session.currentTrack().track.isRemote()) {
+    if(update.reachedPlayedThreshold && p->m_session.currentTrack().isValid()) {
         qCDebug(PLAYER_CONTROLLER) << "Track reached played threshold:" << "id="
                                    << p->m_session.currentTrack().track.id()
                                    << "path=" << p->m_session.currentTrack().track.uniqueFilepath()

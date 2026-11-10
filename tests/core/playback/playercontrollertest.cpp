@@ -304,6 +304,30 @@ TEST(PlayerControllerTest, TrackPlayedEmitsOnceAfterCrossingThreshold)
     EXPECT_EQ(playedArgs.front().value<Track>(), makeTrack(u"/tmp/played.flac"_s, 13, 1000));
 }
 
+TEST(PlayerControllerTest, RemoteTrackPlayedEmitsOnceAfterCrossingThreshold)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playercontroller_remote_track_played_test.ini"_s};
+    registerControllerSettings(settings);
+    PlayerController controller{&settings, nullptr};
+
+    QSignalSpy playedSpy{&controller, &PlayerController::trackPlayed};
+    const Track track = makeTrack(u"https://music.example.test/song.flac"_s, 26, 120000);
+    ASSERT_TRUE(track.isRemote());
+
+    controller.commitCurrentTrack(track);
+    controller.setCurrentPosition(59000);
+    EXPECT_EQ(playedSpy.count(), 0);
+
+    controller.setCurrentPosition(60000);
+    controller.setCurrentPosition(90000);
+
+    ASSERT_EQ(playedSpy.count(), 1);
+    const QVariantList playedArgs = playedSpy.takeFirst();
+    ASSERT_EQ(playedArgs.size(), 1);
+    EXPECT_EQ(playedArgs.front().value<Track>(), track);
+}
+
 TEST(PlayerControllerTest, TrackPlayedUsesEarlierElapsedThreshold)
 {
     ensureCoreApplication();
