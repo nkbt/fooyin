@@ -242,7 +242,10 @@ void LoveControl::updateTrack(const Track& track)
                     appearance.unlovedHeartColour, appearance.loveSymbols};
     love.setSymbolFont(appearance.loveSymbolFont);
     m_editor->setValue(love);
-    m_editor->setInteractive(track.isValid() && m_playerController->playState() != Player::PlayState::Stopped);
+    const bool readOnly = track.readOnlyStats().testFlag(Track::Stat::Loved);
+    m_editor->setToolTip(readOnly ? tr("Loved status is managed by the library source") : tr("Change loved status"));
+    m_editor->setInteractive(!readOnly && track.isValid()
+                             && m_playerController->playState() != Player::PlayState::Stopped);
     setMinimumSize(m_editor->sizeHint());
 }
 
@@ -254,7 +257,8 @@ void LoveControl::updateAppearance()
 void LoveControl::changeLoved(bool loved)
 {
     Track track = m_playerController->currentTrack();
-    if(!track.isValid() || m_playerController->playState() == Player::PlayState::Stopped) {
+    if(!track.isValid() || track.readOnlyStats().testFlag(Track::Stat::Loved)
+       || m_playerController->playState() == Player::PlayState::Stopped) {
         return;
     }
 

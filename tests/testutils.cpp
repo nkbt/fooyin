@@ -347,4 +347,15 @@ WriteRequest StubMusicLibrary::deleteTracks(const TrackList& /*tracks*/)
 {
     return {};
 }
+
+std::optional<LibraryInfo> StubMusicLibrary::addExternalLibrary(const QString& /*path*/, const QString& /*name*/)
+{
+    return {};
+}
+
+void StubMusicLibrary::applyExternalLibrarySnapshot(const LibraryInfo& library, const TrackList& /*tracks*/,
+                                                    const QUuid& operation)
+{
+    Q_EMIT externalLibrarySnapshotFinished(operation, library.id, false);
+}
 } // namespace Fooyin::Testing

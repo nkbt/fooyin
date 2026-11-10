@@ -989,7 +989,13 @@ bool Playlist::isLocked() const
 {
     assertMainThread();
 
-    return p->m_extraProps.value(PlaylistLockedProperty) == "1"_L1;
+    return !sourceLibraryPath().isEmpty() || p->m_extraProps.value(PlaylistLockedProperty) == "1"_L1;
+}
+
+QString Playlist::sourceLibraryPath() const
+{
+    assertMainThread();
+    return p->m_extraProps.value("core/source-library-path"_L1);
 }
 
 QString Playlist::query() const

@@ -143,6 +143,27 @@ void TrackDatabaseManager::getAllTracks(std::stop_token workerToken)
     setState(Idle);
 }
 
+std::optional<std::pair<TrackList, TrackList>>
+TrackDatabaseManager::storeExternalLibrarySnapshot(const LibraryInfo& library, TrackList addedTracks,
+                                                   TrackList updatedTracks, Track::Stats sourceStats,
+                                                   std::stop_token workerToken)
+{
+    if(!startWork(workerToken)) {
+        return {};
+    }
+
+    const bool stored = m_trackDatabase.storeExternalSnapshot(library, addedTracks, updatedTracks, sourceStats);
+
+    setState(Idle);
+
+    if(!stored) {
+        qCWarning(TRK_DBMAN) << "Failed to store external library snapshot";
+        return {};
+    }
+
+    return std::pair{addedTracks, updatedTracks};
+}
+
 void TrackDatabaseManager::checkTrackAvailability(const TrackList& tracks, std::stop_token workerToken)
 {
     if(!startWork(workerToken)) {

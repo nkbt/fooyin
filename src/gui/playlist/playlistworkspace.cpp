@@ -88,8 +88,12 @@ void PlaylistWorkspace::restoreLastPlaylist(PlaylistHandler* handler, PlayerCont
         m_currentPlaylist = handler->playlistByDbId(lastId);
     }
 
+    if(m_currentPlaylist && !handler->isPlaylistVisible(m_currentPlaylist->id())) {
+        m_currentPlaylist = nullptr;
+    }
     if(!m_currentPlaylist) {
-        m_currentPlaylist = handler->playlistByIndex(0);
+        const auto playlists = handler->playlists();
+        m_currentPlaylist    = playlists.empty() ? nullptr : playlists.front();
     }
 
     if(m_currentPlaylist && !handler->activePlaylist() && playerController->playState() == Player::PlayState::Stopped) {
@@ -128,6 +132,11 @@ void PlaylistWorkspace::savePersistentState() const
 bool PlaylistWorkspace::playlistsHaveLoaded() const
 {
     return m_loaded;
+}
+
+Playlist* PlaylistWorkspace::clearCurrentPlaylist()
+{
+    return std::exchange(m_currentPlaylist, nullptr);
 }
 
 Playlist* PlaylistWorkspace::currentPlaylist() const

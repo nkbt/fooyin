@@ -127,6 +127,9 @@ public:
     /** Advances and returns a track relative to the current index in the active playlist. */
     [[nodiscard]] PlaylistTrack advanceRelativeTrack(Playlist::PlayModes mode, int delta = 1);
 
+    Playlist* applyExternalPlaylist(const QString& sourceLibraryPath, const UId& id, const QString& name,
+                                    const PlaylistTrackList& playlistTracks);
+    void removeExternalPlaylist(const QString& sourceLibraryPath, const UId& id);
     void renamePlaylist(const UId& id, const QString& name);
     /** Enables or disables changes to the contents of the playlist with @p id. */
     void setPlaylistLocked(const UId& id, bool locked);
@@ -141,6 +144,7 @@ public:
     [[nodiscard]] Playlist* activePlaylist() const;
 
     [[nodiscard]] int playlistCount() const;
+    [[nodiscard]] bool isPlaylistVisible(const UId& id) const;
     /** Prime upcoming track state/metadata for seamless transition preparation. */
     void prepareUpcomingTrack();
 

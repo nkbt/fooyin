@@ -134,7 +134,7 @@ std::optional<PlaylistTrack> remapPlaylistTrackReference(PlaylistHandler* playli
     }
 
     auto* playlist = playlistHandler->playlistById(track.playlistId);
-    if(!playlist) {
+    if(!playlist || !playlistHandler->isPlaylistVisible(playlist->id())) {
         return {};
     }
 
@@ -559,6 +559,12 @@ void PlayerControllerPrivate::emitUpcomingTrackChangedIfNeeded()
 
 void PlayerControllerPrivate::requestTrackChange(const Player::TrackChangeRequest& request)
 {
+    if(m_playlistHandler && request.track.playlistId.isValid()) {
+        const auto* playlist = m_playlistHandler->playlistById(request.track.playlistId);
+        if(playlist && !m_playlistHandler->isPlaylistVisible(playlist->id())) {
+            return;
+        }
+    }
     m_self->clearABRepeat();
     const auto requestWithId
         = m_session.requestTrackChange(m_session.withPlaybackItemId(request, nextPlaybackItemId()));
@@ -967,6 +973,12 @@ bool PlayerControllerPrivate::requestSelectedTrack(const RequestedTrack& selecti
     if(!selection.track.isValid() || !m_session.canAcceptRequest()) {
         return false;
     }
+    if(m_playlistHandler && selection.track.playlistId.isValid()) {
+        const auto* playlist = m_playlistHandler->playlistById(selection.track.playlistId);
+        if(playlist && !m_playlistHandler->isPlaylistVisible(playlist->id())) {
+            return false;
+        }
+    }
 
     requestTrackChange({
         .track        = selection.track,
@@ -992,7 +1004,7 @@ bool PlayerControllerPrivate::requestSelectedTrack(const std::optional<Requested
 std::optional<PlayerControllerPrivate::RequestedTrack>
 PlayerControllerPrivate::requestedPlaylistTrack(Playlist* playlist, int index) const
 {
-    if(!playlist || index < 0) {
+    if(!playlist || index < 0 || !m_playlistHandler->isPlaylistVisible(playlist->id())) {
         return {};
     }
 
@@ -2099,7 +2111,8 @@ void PlayerController::startPlayback(Playlist* playlist, const QueueTracks& trac
         return;
     }
 
-    if(!playlist->id().isValid() || p->m_playlistHandler->playlistById(playlist->id()) != playlist) {
+    if(!playlist->id().isValid() || p->m_playlistHandler->playlistById(playlist->id()) != playlist
+       || !p->m_playlistHandler->isPlaylistVisible(playlist->id())) {
         return;
     }
 

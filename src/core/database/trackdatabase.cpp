@@ -181,40 +181,111 @@ bool TrackDatabase::storeTracks(TrackList& tracks)
     }
 
     for(auto& track : tracks) {
-        if(track.id() < 0) {
-            if(!insertTrack(track, true)) {
-                return false;
-            }
-
-            if(track.id() < 0) {
-                if(const int existingTrackId = idForTrack(track); existingTrackId >= 0) {
-                    track.setId(existingTrackId);
-                }
-                else {
-                    return false;
-                }
-            }
-
-            Track::Stats importedStats{Track::Stat::Playcount};
-            if(track.rating() > 0) {
-                importedStats |= Track::Stat::Rating;
-            }
-
-            StoredTrackStats stats;
-            if(!insertOrUpdateStats(track, &stats, importedStats)) {
-                return false;
-            }
-
-            track.setAddedTime(stats.added);
-            track.setFirstPlayed(stats.firstPlayed);
-            track.setLastPlayed(stats.lastPlayed);
-            track.setPlayCount(stats.playCount);
-            track.setRating(stats.rating);
-            track.setLoved(stats.loved);
+        if(track.id() < 0 && !storeTrack(track, Track::Stat::None)) {
+            return false;
         }
     }
 
     return transaction.commit();
+}
+
+bool TrackDatabase::storeExternalSnapshot(const LibraryInfo& library, TrackList& addedTracks, TrackList& updatedTracks,
+                                          Track::Stats sourceStats)
+{
+    DbTransaction transaction{db()};
+
+    if(!transaction) {
+        return false;
+    }
+
+    static const QString statement = u"SELECT 1 FROM Libraries WHERE LibraryID = :libraryId AND Path = :path;"_s;
+
+    DbQuery libraryQuery{db(), statement};
+    libraryQuery.bindValue(u":libraryId"_s, library.id);
+    libraryQuery.bindValue(u":path"_s, library.path);
+
+    if(!libraryQuery.exec() || !libraryQuery.next()) {
+        return false;
+    }
+
+    for(auto& track : addedTracks) {
+        if(track.id() >= 0 || track.libraryId() != library.id || idForTrack(track) >= 0
+           || !storeTrack(track, sourceStats)) {
+            return false;
+        }
+    }
+
+    static const QString ownerStatement = u"SELECT LibraryID FROM Tracks WHERE TrackID = :trackId;"_s;
+
+    for(auto& track : updatedTracks) {
+        if(track.libraryId() != library.id && track.libraryId() >= 0) {
+            return false;
+        }
+
+        DbQuery ownerQuery{db(), ownerStatement};
+        ownerQuery.bindValue(u":trackId"_s, track.id());
+
+        if(!ownerQuery.exec() || !ownerQuery.next()) {
+            return false;
+        }
+
+        const int ownerId = ownerQuery.value(0).toInt();
+        if(ownerId >= 0 && ownerId != library.id) {
+            return false;
+        }
+
+        StoredTrackStats stats;
+        const Track::Stats importedStats = track.libraryId() == library.id ? sourceStats : Track::Stat::None;
+        if(!updateTrackData(track) || !insertOrUpdateStats(track, &stats, importedStats)) {
+            return false;
+        }
+        track.setAddedTime(stats.added);
+        track.setFirstPlayed(stats.firstPlayed);
+        track.setLastPlayed(stats.lastPlayed);
+        track.setPlayCount(stats.playCount);
+        track.setRating(stats.rating);
+        track.setLoved(stats.loved);
+    }
+
+    return transaction.commit();
+}
+
+bool TrackDatabase::storeTrack(Track& track, Track::Stats sourceStats)
+{
+    if(!insertTrack(track, true)) {
+        return false;
+    }
+
+    if(track.id() < 0) {
+        if(const int existingTrackId = idForTrack(track); existingTrackId >= 0) {
+            track.setId(existingTrackId);
+        }
+        else {
+            return false;
+        }
+    }
+
+    Track::Stats importedStats{sourceStats};
+    if(track.externalLibraryPath().isEmpty()) {
+        importedStats |= Track::Stat::Playcount;
+        if(track.rating() > 0) {
+            importedStats |= Track::Stat::Rating;
+        }
+    }
+
+    StoredTrackStats stats;
+    if(!insertOrUpdateStats(track, &stats, importedStats)) {
+        return false;
+    }
+
+    track.setAddedTime(stats.added);
+    track.setFirstPlayed(stats.firstPlayed);
+    track.setLastPlayed(stats.lastPlayed);
+    track.setPlayCount(stats.playCount);
+    track.setRating(stats.rating);
+    track.setLoved(stats.loved);
+
+    return true;
 }
 
 bool TrackDatabase::updateTracks(TrackList& tracks)
@@ -392,6 +463,15 @@ int TrackDatabase::idForTrack(Track& track) const
 
 bool TrackDatabase::updateTrack(const Track& track)
 {
+    Track canonical{track};
+    if(reloadTrack(canonical) && !canonical.externalLibraryPath().isEmpty()) {
+        return false;
+    }
+    return updateTrackData(track);
+}
+
+bool TrackDatabase::updateTrackData(const Track& track)
+{
     if(track.id() < 0) {
         qCWarning(TRK_DB) << "Cannot update track" << track.filepath() << "(Invalid ID)";
         return false;
@@ -453,11 +533,22 @@ bool TrackDatabase::updateTrack(const Track& track)
 
 bool TrackDatabase::updateTrackStats(const Track& track)
 {
-    return insertOrUpdateStats(track);
+    Track updatedTrack{track};
+    return updateTrackStats(updatedTrack, Track::Stat::All);
 }
 
 bool TrackDatabase::updateTrackStats(Track& track, Track::Stats updatedStats)
 {
+    Track canonical{track};
+    if(reloadTrack(canonical)) {
+        updatedStats &= ~canonical.readOnlyStats();
+        track.setExternalLibraryPath(canonical.externalLibraryPath());
+        track.setReadOnlyStats(canonical.readOnlyStats());
+        if(!canonical.externalLibraryPath().isEmpty()) {
+            track.setFilePath(canonical.filepath());
+            track.generateHash();
+        }
+    }
     StoredTrackStats stats;
     if(!insertOrUpdateStats(track, &stats, updatedStats)) {
         return false;
@@ -484,7 +575,8 @@ bool TrackDatabase::updateTrackStats(const TrackList& tracks)
     }
 
     for(const Track& track : tracks) {
-        if(!insertOrUpdateStats(track)) {
+        Track updatedTrack{track};
+        if(!updateTrackStats(updatedTrack, Track::Stat::All)) {
             return false;
         }
     }

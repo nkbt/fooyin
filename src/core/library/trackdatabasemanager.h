@@ -27,7 +27,9 @@
 #include <utils/worker.h>
 
 #include <memory>
+#include <optional>
 #include <stop_token>
+#include <utility>
 #include <vector>
 
 namespace Fooyin {
@@ -55,6 +57,13 @@ public:
     void initialiseThread() override;
 
     void updateTrackStats(const std::vector<TrackStatsBatch>& batches, std::stop_token workerToken);
+    /*!
+     * Stores an external library snapshot. Returns the added tracks with their new IDs and the updated tracks with
+     * their merged statistics, or nothing on failure.
+     */
+    std::optional<std::pair<TrackList, TrackList>>
+    storeExternalLibrarySnapshot(const LibraryInfo& library, TrackList addedTracks, TrackList updatedTracks,
+                                 Track::Stats sourceStats, std::stop_token workerToken);
 
 Q_SIGNALS:
     void gotTracks(const Fooyin::TrackList& tracks);

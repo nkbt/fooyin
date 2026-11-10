@@ -288,6 +288,11 @@ public:
     //! Returns the non-empty built-in metadata fields formatted for display.
     [[nodiscard]] QMap<QString, QString> metadata() const;
 
+    //! Returns the path of the external library that owns this track's statistics, or an empty string.
+    [[nodiscard]] QString externalLibraryPath() const;
+    //! Returns the statistics that only the owning external library can change.
+    [[nodiscard]] Stats readOnlyStats() const;
+
     [[nodiscard]] bool hasExtraProperty(const QString& prop) const;
     /*!
      * Returns technical/runtime properties that are not persisted as audio tags.
@@ -421,6 +426,12 @@ public:
     void mergePreservedExtraProperties(const Track& existingTrack);
     //! Removes both the property and its reload policy.
     void removeExtraProperty(const QString& prop);
+    /*!
+     * Assigns the track to an external library. The statistics hash then uses the library path and the track path
+     * instead of the metadata, so statistics of different sources never merge.
+     */
+    void setExternalLibraryPath(const QString& path);
+    void setReadOnlyStats(Stats stats);
     //! Removes internal extra properties whose value is equivalent to the default state.
     void normaliseExtraProperties();
     void clearExtraProperties();

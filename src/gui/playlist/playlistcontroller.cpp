@@ -214,7 +214,7 @@ void PlaylistController::applyPresetToPlaylists(int presetId, const std::vector<
 
 void PlaylistController::changeCurrentPlaylist(Playlist* playlist)
 {
-    if(!playlist) {
+    if(!playlist || !m_handler->isPlaylistVisible(playlist->id())) {
         return;
     }
 
@@ -269,7 +269,8 @@ void PlaylistController::clearCurrentPlaylist()
 bool PlaylistController::insertPlaylistItems(const UId& playlistId, int index, const TrackList& tracks)
 {
     auto* playlist = m_handler->playlistById(playlistId);
-    if(!playlist || playlist->isAutoPlaylist() || tracks.empty() || index < -1 || index > playlist->trackCount()) {
+    if(!playlist || !playlist->sourceLibraryPath().isEmpty() || playlist->isAutoPlaylist() || tracks.empty()
+       || index < -1 || index > playlist->trackCount()) {
         return false;
     }
 
@@ -313,7 +314,7 @@ bool PlaylistController::replacePlaylistItem(const UId& playlistId, int index, c
 bool PlaylistController::removePlaylistItems(const UId& playlistId, const std::vector<int>& indexes)
 {
     auto* playlist = m_handler->playlistById(playlistId);
-    if(!playlist || playlist->isAutoPlaylist() || indexes.empty()) {
+    if(!playlist || !playlist->sourceLibraryPath().isEmpty() || playlist->isAutoPlaylist() || indexes.empty()) {
         return false;
     }
 
@@ -336,7 +337,7 @@ bool PlaylistController::removePlaylistItems(const UId& playlistId, const std::v
 bool PlaylistController::clearPlaylist(const UId& playlistId)
 {
     auto* playlist = m_handler->playlistById(playlistId);
-    if(!playlist || playlist->isAutoPlaylist()) {
+    if(!playlist || !playlist->sourceLibraryPath().isEmpty() || playlist->isAutoPlaylist()) {
         return false;
     }
     if(playlist->trackCount() == 0) {
@@ -356,7 +357,8 @@ bool PlaylistController::clearPlaylist(const UId& playlistId)
 bool PlaylistController::movePlaylistItems(const UId& playlistId, const std::vector<int>& indexes, int newIndex)
 {
     auto* playlist = m_handler->playlistById(playlistId);
-    if(!playlist || (playlist->isAutoPlaylist() && playlist->forceSorted()) || indexes.empty()) {
+    if(!playlist || !playlist->sourceLibraryPath().isEmpty() || (playlist->isAutoPlaylist() && playlist->forceSorted())
+       || indexes.empty()) {
         return false;
     }
 
@@ -409,7 +411,7 @@ bool PlaylistController::movePlaylistItems(const UId& playlistId, const std::vec
 bool PlaylistController::reorderPlaylistItems(const UId& playlistId, const std::vector<int>& order)
 {
     auto* playlist = m_handler->playlistById(playlistId);
-    if(!playlist || (playlist->isAutoPlaylist() && playlist->forceSorted())
+    if(!playlist || !playlist->sourceLibraryPath().isEmpty() || (playlist->isAutoPlaylist() && playlist->forceSorted())
        || std::cmp_not_equal(order.size(), playlist->trackCount())) {
         return false;
     }
@@ -444,7 +446,8 @@ bool PlaylistController::reorderPlaylistItems(const UId& playlistId, const std::
 
 bool PlaylistController::removePlaylist(const UId& playlistId, QWidget* parent)
 {
-    if(!m_handler->playlistById(playlistId) || !confirmPlaylistRemoval({&playlistId, 1}, parent)) {
+    const Playlist* playlist = m_handler->playlistById(playlistId);
+    if(!playlist || !playlist->sourceLibraryPath().isEmpty() || !confirmPlaylistRemoval({&playlistId, 1}, parent)) {
         return false;
     }
 
@@ -871,29 +874,32 @@ void PlaylistController::handlePlaylistRemoved(Playlist* playlist)
     if(!playlist) {
         return;
     }
-
     m_workspace->removePlaylist(playlist);
-
     if(!m_workspace->isCurrentPlaylist(playlist)) {
         return;
     }
-
-    if(m_handler->playlistCount() == 0) {
+    const auto visiblePlaylists = m_handler->playlists();
+    if(visiblePlaylists.empty()) {
+        auto* previousPlaylist = m_workspace->clearCurrentPlaylist();
+        Q_EMIT currentPlaylistChanged(previousPlaylist, nullptr);
         QObject::connect(
             m_handler, &PlaylistHandler::playlistAdded, this,
-            [this](Playlist* newPlaylist) {
-                if(newPlaylist) {
-                    changeCurrentPlaylist(newPlaylist);
+            [this](Playlist* addedPlaylist) {
+                if(addedPlaylist && m_handler->isPlaylistVisible(addedPlaylist->id())) {
+                    changeCurrentPlaylist(addedPlaylist);
                 }
             },
             Qt::SingleShotConnection);
+        return;
     }
-    else {
-        const int nextIndex = std::max(0, playlist->index() - 1);
-        if(auto* nextPlaylist = m_handler->playlistByIndex(nextIndex)) {
-            changeCurrentPlaylist(nextPlaylist);
+    Playlist* nextPlaylist = visiblePlaylists.front();
+    const int nextIndex    = std::max(0, playlist->index() - 1);
+    for(Playlist* candidate : visiblePlaylists) {
+        if(candidate->index() <= nextIndex) {
+            nextPlaylist = candidate;
         }
     }
+    changeCurrentPlaylist(nextPlaylist);
 }
 } // namespace Fooyin
 

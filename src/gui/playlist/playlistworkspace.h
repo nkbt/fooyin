@@ -44,6 +44,7 @@ public:
 
     [[nodiscard]] bool playlistsHaveLoaded() const;
     [[nodiscard]] Playlist* currentPlaylist() const;
+    Playlist* clearCurrentPlaylist();
     [[nodiscard]] UId currentPlaylistId() const;
     [[nodiscard]] bool currentIsActive(const PlaylistHandler* handler) const;
     [[nodiscard]] bool currentIsAuto() const;

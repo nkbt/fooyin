@@ -21,6 +21,7 @@
 
 #include "fycore_export.h"
 
+#include <core/library/libraryinfo.h>
 #include <core/track.h>
 #include <utils/database/dbmodule.h>
 
@@ -41,6 +42,13 @@ public:
     void setMetadataStore(std::shared_ptr<TrackMetadataStore> store);
 
     bool storeTracks(TrackList& tracks);
+    /*!
+     * Inserts @p addedTracks and updates @p updatedTracks in one transaction while @p library is still registered.
+     * Fails without changes if a track belongs to another library. Statistics of updated tracks are merged under their
+     * current hash, as for a library scan.
+     */
+    bool storeExternalSnapshot(const LibraryInfo& library, TrackList& addedTracks, TrackList& updatedTracks,
+                               Track::Stats sourceStats);
     bool updateTracks(TrackList& tracks);
     std::expected<void, QString> writeScanBatch(TrackList& tracksToStore, TrackList& tracksToUpdate);
 
@@ -66,6 +74,8 @@ public:
 
 private:
     [[nodiscard]] int trackCount() const;
+    bool storeTrack(Track& track, Track::Stats sourceStats);
+    bool updateTrackData(const Track& track);
     bool insertTrack(Track& track, bool ignoreDuplicates = false) const;
 
     struct StoredTrackStats

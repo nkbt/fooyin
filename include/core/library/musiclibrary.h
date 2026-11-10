@@ -27,6 +27,7 @@
 
 #include <QFuture>
 #include <QObject>
+#include <QUuid>
 
 namespace Fooyin {
 class MusicLibraryPrivate;
@@ -190,6 +191,17 @@ public:
     [[nodiscard]] virtual TrackList tracks() const = 0;
     /** Returns all tracks that belong to a music library. */
     [[nodiscard]] virtual TrackList libraryTracks() const = 0;
+    /** Returns tracks whose external source is active, including local library tracks. */
+    [[nodiscard]] TrackList activeLibraryTracks() const;
+    /** Returns @c true when the source of @p track is available to library consumers. */
+    [[nodiscard]] virtual bool isTrackSourceActive(const Track& track) const;
+    /** Returns @c true when @p stats can be changed outside the source which owns @p track. */
+    [[nodiscard]] bool canUpdateTrackStats(const Track& track, Track::Stats stats) const;
+    /** Shows or hides the tracks belonging to external @p library without removing them. */
+    virtual void setExternalLibraryActive(const LibraryInfo& library, bool active);
+    /** Sets the @p stats which may only be changed by the owner of external @p library. */
+    virtual void setExternalLibraryReadOnlyStats(const LibraryInfo& library, Track::Stats stats);
+
     /** Returns library tracks constrained by the active global library filter. */
     [[nodiscard]] TrackList visibleLibraryTracks() const;
     /** Returns @c true if one or more global library filters are active. */
@@ -238,6 +250,21 @@ public:
     /** Delete @p tracks from the library and database. */
     virtual WriteRequest deleteTracks(const TrackList& tracks) = 0;
 
+    /*!
+     * Registers an externally managed library at @p path.
+     * Existing paths retain their library identity; overlapping source paths are rejected.
+     * Refresh requests emit externalLibraryRefreshRequested() instead of scanning files.
+     */
+    virtual std::optional<LibraryInfo> addExternalLibrary(const QString& path, const QString& name) = 0;
+    /*!
+     * Applies a complete snapshot for external @p library in one database transaction.
+     * Tracks must belong to the source path. Existing IDs and local statistics are preserved.
+     * Missing tracks are detached, while statistics owned by the source are updated.
+     * @note @p operation must be unique and non-null; externalLibrarySnapshotFinished() reports its result once.
+     */
+    virtual void applyExternalLibrarySnapshot(const LibraryInfo& library, const TrackList& tracks,
+                                              const QUuid& operation) = 0;
+
 Q_SIGNALS:
     /** Emitted whenever the progress state for a scan request changes. */
     void scanProgress(const Fooyin::ScanProgress& progress);
@@ -261,6 +288,13 @@ Q_SIGNALS:
     void tracksStatsChanged(const Fooyin::TrackList& tracks, Fooyin::Track::Stats stats);
     void tracksDeleted(const Fooyin::TrackList& tracks);
     void tracksSorted(const Fooyin::TrackList& tracks);
+
+    /** Emitted when a refresh or rescan is requested for an external library. */
+    void externalLibraryRefreshRequested(const Fooyin::LibraryInfo& library);
+
+    /** Reports the exact snapshot operation and its committed result. */
+    void externalLibrarySnapshotFinished(const QUuid& operation, int libraryId, bool success);
+    void sourceActivationChanged();
 
     void activeLibraryFiltersChanged();
     void visibleLibraryTracksChanged();

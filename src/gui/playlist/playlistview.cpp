@@ -825,6 +825,15 @@ void PlaylistView::editTrackStat(const QModelIndex& index, const QVariant& value
         indexes.push_back(index);
     }
 
+    for(const QModelIndex& statIndex : std::as_const(indexes)) {
+        if(statIndex.data(PlaylistItem::PersistentItemData)
+               .value<PlaylistTrack>()
+               .track.readOnlyStats()
+               .testFlag(stat)) {
+            return;
+        }
+    }
+
     if(index.flags().testFlag(Qt::ItemIsEditable)) {
         auto* playlistModel = qobject_cast<PlaylistModel*>(model());
         if(playlistModel && indexes.size() > 1) {

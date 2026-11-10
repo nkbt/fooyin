@@ -53,7 +53,7 @@ public:
         const uint64_t revision  = ++m_libraryFilterRevision;
         const QString expression = combinedExpression(m_activeLibraryFilters);
 
-        Utils::asyncExec([expression, tracks = m_self->libraryTracks()]() {
+        Utils::asyncExec([expression, tracks = m_self->activeLibraryTracks()]() {
             TrackQueryFilter filter;
             return filter.filter(expression, tracks);
         }).then(m_self, [this, revision](TrackList tracks) {
@@ -82,6 +82,15 @@ MusicLibrary::MusicLibrary(QObject* parent)
         }
     };
 
+    QObject::connect(this, &MusicLibrary::sourceActivationChanged, this, [this]() {
+        ++p->m_libraryFilterRevision;
+        std::erase_if(p->m_visibleLibraryTracks, [this](const Track& track) { return !isTrackSourceActive(track); });
+        Q_EMIT visibleLibraryTracksChanged();
+        if(hasActiveLibraryFilters()) {
+            p->refreshVisibleLibraryTracks();
+        }
+    });
+
     QObject::connect(this, &MusicLibrary::tracksLoaded, this, refreshActiveFilter);
     QObject::connect(this, &MusicLibrary::tracksAdded, this, refreshActiveFilter);
     QObject::connect(this, &MusicLibrary::tracksMetadataChanged, this, refreshActiveFilter);
@@ -95,8 +104,32 @@ MusicLibrary::~MusicLibrary() = default;
 
 TrackList MusicLibrary::visibleLibraryTracks() const
 {
-    return hasActiveLibraryFilters() ? p->m_visibleLibraryTracks : libraryTracks();
+    TrackList tracks = hasActiveLibraryFilters() ? p->m_visibleLibraryTracks : activeLibraryTracks();
+    std::erase_if(tracks, [this](const Track& track) { return !isTrackSourceActive(track); });
+    return tracks;
 }
+
+TrackList MusicLibrary::activeLibraryTracks() const
+{
+    TrackList result = libraryTracks();
+    std::erase_if(result, [this](const Track& track) { return !isTrackSourceActive(track); });
+    return result;
+}
+
+bool MusicLibrary::isTrackSourceActive(const Track& /*track*/) const
+{
+    return true;
+}
+
+bool MusicLibrary::canUpdateTrackStats(const Track& track, Track::Stats stats) const
+{
+    const Track canonical = trackForId(track.id());
+    return !((canonical.isValid() ? canonical.readOnlyStats() : track.readOnlyStats()) & stats);
+}
+
+void MusicLibrary::setExternalLibraryActive(const LibraryInfo& /*library*/, bool /*active*/) { }
+
+void MusicLibrary::setExternalLibraryReadOnlyStats(const LibraryInfo& /*library*/, Track::Stats /*stats*/) { }
 
 bool MusicLibrary::hasActiveLibraryFilters() const
 {

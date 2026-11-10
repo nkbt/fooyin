@@ -84,6 +84,12 @@ public:
     void cleanupTracks();
     WriteRequest removeUnavailbleTracks() override;
     WriteRequest deleteTracks(const TrackList& tracks) override;
+    std::optional<LibraryInfo> addExternalLibrary(const QString& path, const QString& name) override;
+    void applyExternalLibrarySnapshot(const LibraryInfo& library, const TrackList& tracks,
+                                      const QUuid& operation) override;
+    bool isTrackSourceActive(const Track& track) const override;
+    void setExternalLibraryActive(const LibraryInfo& library, bool active) override;
+    void setExternalLibraryReadOnlyStats(const LibraryInfo& library, Track::Stats stats) override;
 
 private:
     std::unique_ptr<UnifiedMusicLibraryPrivate> p;

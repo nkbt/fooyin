@@ -1200,7 +1200,11 @@ void GuiApplication::registerActions()
     const auto updateLockPlaylistState = [this, lockPlaylistAction]() {
         const auto* playlist = m_playlistController->currentPlaylist();
         const QSignalBlocker blocker{lockPlaylistAction};
-        lockPlaylistAction->setEnabled(playlist && !playlist->isAutoPlaylist());
+        lockPlaylistAction->setEnabled(playlist && !playlist->isAutoPlaylist()
+                                       && playlist->sourceLibraryPath().isEmpty());
+        lockPlaylistAction->setToolTip(playlist && !playlist->sourceLibraryPath().isEmpty()
+                                           ? tr("Playlist is managed by the library source")
+                                           : tr("Lock playlist"));
         lockPlaylistAction->setChecked(playlist && playlist->isLocked());
     };
     QObject::connect(m_playlistController.get(), &PlaylistController::playlistsLoaded, m_mainWindow.get(),
@@ -1270,6 +1274,19 @@ void GuiApplication::registerActions()
             m_playlistController->removePlaylist(currentPlaylist->id(), m_mainWindow.get());
         }
     });
+
+    const auto updateRemovePlaylist = [this, removePlaylist]() {
+        const auto* playlist = m_playlistController->currentPlaylist();
+        const bool readOnly  = playlist && !playlist->sourceLibraryPath().isEmpty();
+        removePlaylist->setEnabled(playlist && !readOnly);
+        removePlaylist->setToolTip(readOnly ? tr("Playlist is managed by the library source")
+                                            : tr("Remove current playlist"));
+    };
+    QObject::connect(m_playlistController.get(), &PlaylistController::currentPlaylistChanged, m_mainWindow.get(),
+                     updateRemovePlaylist);
+    QObject::connect(m_playlistController->playlistHandler(), &PlaylistHandler::playlistUpdated, m_mainWindow.get(),
+                     updateRemovePlaylist);
+    updateRemovePlaylist();
 
     auto* toggleMenubar = new QAction(tr("Toggle Menubar"), m_mainWindow.get());
     toggleMenubar->setCheckable(true);
@@ -1459,6 +1476,12 @@ void GuiApplication::setupPlaybackStatisticsMenu()
             return;
         }
 
+        if(std::ranges::any_of(tracks, [this](const Track& track) {
+               return !m_core->library()->canUpdateTrackStats(track, Track::Stat::Loved);
+           })) {
+            return;
+        }
+
         const bool newLoved = loved.value_or(!std::ranges::all_of(tracks, &Track::isLoved));
         for(auto& track : tracks) {
             track.setLoved(newLoved);
@@ -1479,8 +1502,12 @@ void GuiApplication::setupPlaybackStatisticsMenu()
 
         m_selectionController->registerTrackContextAction(
             this, TrackContextMenuArea::Track, Constants::Menus::Context::TrackSelection, id, action->text(),
-            [action](QMenu* menu, const TrackSelection& selection) {
-                action->setEnabled(!selection.tracks.empty());
+            [this, action](QMenu* menu, const TrackSelection& selection) {
+                const bool readOnly = std::ranges::any_of(selection.tracks, [this](const Track& track) {
+                    return !m_core->library()->canUpdateTrackStats(track, Track::Stat::Loved);
+                });
+                action->setEnabled(!selection.tracks.empty() && !readOnly);
+                action->setToolTip(readOnly ? tr("Loved status is managed by the library source") : action->text());
                 menu->addAction(action);
             },
             Constants::Actions::OpenFolder);
