@@ -4287,7 +4287,7 @@ void ExpandedTreeViewPrivate::interruptDelayedItemsLayout() const
 
 void ExpandedTreeViewPrivate::layoutItems() const
 {
-    if(m_delayedPendingLayout && !m_layingOutItems) {
+    if(m_delayedPendingLayout && !m_layingOutItems && m_modelChangeDepth == 0) {
         interruptDelayedItemsLayout();
         m_self->doItemsLayout();
     }
@@ -4295,7 +4295,7 @@ void ExpandedTreeViewPrivate::layoutItems() const
 
 void ExpandedTreeViewPrivate::doItemsLayout(bool reuseIconMeasurements)
 {
-    if(m_layingOutItems) {
+    if(m_layingOutItems || m_modelChangeDepth > 0) {
         return;
     }
 
@@ -5142,6 +5142,9 @@ void ExpandedTreeView::setModel(QAbstractItemModel* model)
         return;
     }
 
+    const auto modelGeneration = ++p->m_modelGeneration;
+    p->m_modelChangeDepth      = 0;
+    p->interruptDelayedItemsLayout();
     if(p->m_model) {
         QObject::disconnect(p->m_model, nullptr, this, nullptr);
     }
@@ -5151,17 +5154,94 @@ void ExpandedTreeView::setModel(QAbstractItemModel* model)
     p->m_header->setModel(model);
     p->m_updatingGeometry = false;
     p->m_model            = model;
-    QAbstractItemView::setModel(model);
-
-    QObject::disconnect(p->m_model, &QAbstractItemModel::rowsRemoved, this, nullptr);
-    // Do header layout after the tree
-    QObject::disconnect(p->m_model, &QAbstractItemModel::layoutChanged, p->m_header, nullptr);
-
-    QObject::connect(p->m_model, &QAbstractItemModel::modelAboutToBeReset, this, [this]() {
+    // Proxy mappings can expire before synchronous selection callbacks complete.
+    QObject::connect(model, &QAbstractItemModel::rowsAboutToBeInserted, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        ++p->m_modelChangeDepth;
         p->interruptDelayedItemsLayout();
         p->clearViewItems();
     });
-    QObject::connect(p->m_model, &QAbstractItemModel::rowsRemoved, this, &ExpandedTreeView::rowsRemoved);
+    QObject::connect(model, &QAbstractItemModel::rowsAboutToBeRemoved, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        ++p->m_modelChangeDepth;
+        p->interruptDelayedItemsLayout();
+        p->clearViewItems();
+    });
+    QObject::connect(model, &QAbstractItemModel::rowsAboutToBeMoved, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        ++p->m_modelChangeDepth;
+        p->interruptDelayedItemsLayout();
+        p->clearViewItems();
+    });
+    QObject::connect(model, &QAbstractItemModel::layoutAboutToBeChanged, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        ++p->m_modelChangeDepth;
+        p->interruptDelayedItemsLayout();
+        p->clearViewItems();
+    });
+    QObject::connect(model, &QAbstractItemModel::modelAboutToBeReset, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        ++p->m_modelChangeDepth;
+        p->interruptDelayedItemsLayout();
+        p->clearViewItems();
+    });
+    QAbstractItemView::setModel(model);
+    QObject::disconnect(model, &QAbstractItemModel::rowsRemoved, this, nullptr);
+    QObject::connect(model, &QAbstractItemModel::rowsInserted, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        --p->m_modelChangeDepth;
+        p->doDelayedItemsLayout();
+    });
+    QObject::connect(model, &QAbstractItemModel::rowsRemoved, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        --p->m_modelChangeDepth;
+        p->doDelayedItemsLayout();
+    });
+    QObject::connect(model, &QAbstractItemModel::rowsMoved, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        --p->m_modelChangeDepth;
+        p->doDelayedItemsLayout();
+    });
+    QObject::connect(model, &QAbstractItemModel::layoutChanged, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        --p->m_modelChangeDepth;
+        p->doDelayedItemsLayout();
+    });
+    QObject::connect(model, &QAbstractItemModel::modelReset, this, [this, modelGeneration]() {
+        if(modelGeneration != p->m_modelGeneration) {
+            return;
+        }
+        --p->m_modelChangeDepth;
+        p->doDelayedItemsLayout();
+    });
+
+    // Do header layout after the tree
+    QObject::disconnect(p->m_model, &QAbstractItemModel::layoutChanged, p->m_header, nullptr);
+
+    QObject::connect(model, &QAbstractItemModel::rowsRemoved, this,
+                     [this, modelGeneration](const QModelIndex& parent, int first, int last) {
+                         if(modelGeneration == p->m_modelGeneration) {
+                             rowsRemoved(parent, first, last);
+                         }
+                     });
 
     if(p->m_sortingEnabled) {
         sortByColumn(p->m_header->sortIndicatorSection(), p->m_header->sortIndicatorOrder());
