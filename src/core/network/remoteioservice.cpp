@@ -53,6 +53,8 @@ struct PendingRemoteStreamState
     std::condition_variable_any ready;
     std::shared_ptr<QNetworkAccessManager> network;
     std::stop_source cancellation;
+    std::stop_token sourceLifetime;
+    std::optional<std::stop_callback<std::function<void()>>> sourceCancellation;
     bool finished{false};
     QString error;
     RemoteStreamSource source;
@@ -67,6 +69,10 @@ bool completePendingStream(const std::shared_ptr<PendingRemoteStreamState>& stat
         const std::scoped_lock lock{state->mutex};
         if(state->finished) {
             return false;
+        }
+        if(state->sourceLifetime.stop_requested()) {
+            source = {};
+            error  = u"Cancelled"_s;
         }
         state->finished = true;
         state->error    = std::move(error);
@@ -198,19 +204,19 @@ void PendingRemoteStream::cancel()
 bool PendingRemoteStream::isFinished() const
 {
     const std::scoped_lock lock{m_state->mutex};
-    return m_state->finished;
+    return m_state->finished || m_state->sourceLifetime.stop_requested();
 }
 
 bool PendingRemoteStream::isReady() const
 {
     const std::scoped_lock lock{m_state->mutex};
-    return m_state->finished && m_state->error.isEmpty();
+    return m_state->finished && m_state->error.isEmpty() && !m_state->sourceLifetime.stop_requested();
 }
 
 QString PendingRemoteStream::errorString() const
 {
     const std::scoped_lock lock{m_state->mutex};
-    return m_state->error;
+    return m_state->sourceLifetime.stop_requested() ? u"Cancelled"_s : m_state->error;
 }
 
 bool PendingRemoteStream::waitForReady(std::chrono::milliseconds timeout, std::stop_token token)
@@ -220,7 +226,11 @@ bool PendingRemoteStream::waitForReady(std::chrono::milliseconds timeout, std::s
         return false;
     }
 
-    m_state->ready.wait_for(lock, token, std::max(0ms, timeout), [state = m_state]() { return state->finished; });
+    m_state->ready.wait_for(lock, token, std::max(0ms, timeout),
+                            [state = m_state]() { return state->finished || state->sourceLifetime.stop_requested(); });
+    if(m_state->sourceLifetime.stop_requested()) {
+        return false;
+    }
     if(m_state->finished) {
         return m_state->error.isEmpty();
     }
@@ -236,7 +246,8 @@ bool PendingRemoteStream::waitForReady(std::chrono::milliseconds timeout, std::s
 RemoteStreamSource PendingRemoteStream::takeSource()
 {
     const std::scoped_lock lock{m_state->mutex};
-    if(!m_state->finished || !m_state->error.isEmpty() || !m_state->source.device) {
+    if(!m_state->finished || !m_state->error.isEmpty() || !m_state->source.device
+       || m_state->sourceLifetime.stop_requested()) {
         return {};
     }
 
@@ -323,8 +334,40 @@ RemoteStreamSource RemoteIoService::createStreamSource(const QUrl& url) const
 
 std::shared_ptr<PendingRemoteStream> RemoteIoService::prepareStream(const QUrl& url) const
 {
-    auto state     = std::make_shared<PendingRemoteStreamState>();
-    state->network = m_networkManager;
+    return prepareSource(createStreamSource(url), {});
+}
+
+std::shared_ptr<PendingRemoteStream> RemoteIoService::prepareStream(const QNetworkRequest& request,
+                                                                    std::stop_token sourceLifetime) const
+{
+    const auto readAheadKb = std::max(1, m_settings->value<Settings::Core::Internal::RemoteReadAheadKb>());
+    const auto timeout
+        = std::chrono::milliseconds{std::max(1000, m_settings->value<Settings::Core::Internal::RemoteOpenTimeoutMs>())};
+    auto device
+        = std::make_unique<NetworkStreamDevice>(m_networkManager, request, readAheadKb * 1024, sourceLifetime, nullptr);
+    device->setOpenTimeout(timeout);
+    RemoteStreamSource source;
+    source.remoteDevice = device.get();
+    source.openTimeout  = timeout;
+    source.device       = std::move(device);
+    return prepareSource(std::move(source), sourceLifetime);
+}
+
+std::shared_ptr<PendingRemoteStream> RemoteIoService::prepareSource(RemoteStreamSource source,
+                                                                    std::stop_token sourceLifetime) const
+{
+    auto state            = std::make_shared<PendingRemoteStreamState>();
+    state->network        = m_networkManager;
+    state->sourceLifetime = sourceLifetime;
+    state->sourceCancellation.emplace(sourceLifetime, [weakState = std::weak_ptr{state}]() {
+        if(const auto state = weakState.lock()) {
+            {
+                const std::scoped_lock lock{state->mutex};
+                state->ready.notify_all();
+            }
+            state->cancellation.request_stop();
+        }
+    });
 
     auto pending
         = std::shared_ptr<PendingRemoteStream>{new PendingRemoteStream{state}, [](PendingRemoteStream* handle) {
@@ -338,7 +381,6 @@ std::shared_ptr<PendingRemoteStream> RemoteIoService::prepareStream(const QUrl& 
                                                }};
     state->handle = pending;
 
-    auto source = createStreamSource(url);
     source.device->moveToThread(m_networkManager->thread());
 
     const bool invoked = QMetaObject::invokeMethod(

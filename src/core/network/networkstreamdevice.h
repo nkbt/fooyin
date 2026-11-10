@@ -25,7 +25,9 @@
 
 #include <QIODevice>
 #include <QNetworkAccessManager>
+#include <QNetworkRequest>
 #include <QUrl>
+#include <stop_token>
 
 #include <functional>
 #include <memory>
@@ -42,6 +44,8 @@ class FYCORE_EXPORT NetworkStreamDevice : public QIODevice,
 public:
     NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> network, QUrl url, qsizetype maxBufferedBytes,
                         QObject* parent = nullptr);
+    NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> network, QNetworkRequest request,
+                        qsizetype maxBufferedBytes, std::stop_token sourceLifetime, QObject* parent);
     ~NetworkStreamDevice() override;
 
     [[nodiscard]] bool isSequential() const override;
@@ -72,5 +76,6 @@ private:
 
     QUrl m_url;
     std::shared_ptr<NetworkStreamDeviceState> m_state;
+    std::unique_ptr<std::stop_callback<std::function<void()>>> m_sourceCancellation;
 };
 } // namespace Fooyin

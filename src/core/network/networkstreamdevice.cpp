@@ -83,6 +83,8 @@ struct IcyMetadataState
 struct NetworkStreamDeviceState
 {
     QPointer<QNetworkReply> reply;
+    std::optional<QNetworkRequest> request;
+    std::stop_token sourceLifetime;
     std::mutex mutex;
     std::condition_variable_any ready;
     QString error;
@@ -107,7 +109,7 @@ struct NetworkStreamDeviceState
     {
         error.clear();
         finished              = false;
-        aborted               = false;
+        aborted               = sourceLifetime.stop_requested();
         contentLength         = -1;
         modifiedTime          = 0;
         requestOffset         = 0;
@@ -504,7 +506,8 @@ void startNetworkStreamRequestOnNetworkThread(const std::shared_ptr<QNetworkAcce
 {
     {
         const std::scoped_lock lock{state->mutex};
-        if(requestId != state->requestId || state->aborted || state->finished || state->reply) {
+        if(requestId != state->requestId || state->aborted || state->sourceLifetime.stop_requested() || state->finished
+           || state->reply) {
             return;
         }
     }
@@ -512,6 +515,10 @@ void startNetworkStreamRequestOnNetworkThread(const std::shared_ptr<QNetworkAcce
     QNetworkRequest req = makeNetworkRequest(url, NetworkRequestOption::AlwaysNetwork | NetworkRequestOption::AcceptAny
                                                       | NetworkRequestOption::IcyMetadata
                                                       | NetworkRequestOption::UserVerifiedRedirects);
+    if(state->request) {
+        req = *state->request;
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
+    }
     req.setRawHeader("Accept-Encoding", "identity");
     if(offset >= 0) {
         req.setRawHeader("Range", "bytes=" + QByteArray::number(offset) + '-');
@@ -522,7 +529,8 @@ void startNetworkStreamRequestOnNetworkThread(const std::shared_ptr<QNetworkAcce
 
     {
         const std::scoped_lock lock{state->mutex};
-        if(requestId != state->requestId || state->aborted || state->finished || state->reply) {
+        if(requestId != state->requestId || state->aborted || state->sourceLifetime.stop_requested() || state->finished
+           || state->reply) {
             reply->abort();
             reply->deleteLater();
             return;
@@ -539,12 +547,30 @@ void startNetworkStreamRequestOnNetworkThread(const std::shared_ptr<QNetworkAcce
 
     // Reply signals may arrive after the device is closed from the decode thread
     // Capture only shared state here; never capture the device object
-    QObject::connect(reply, &QNetworkReply::redirected, reply, [state, reply](const QUrl&) {
+    QObject::connect(reply, &QNetworkReply::redirected, reply, [state, reply](const QUrl& target) {
+        bool allowed{false};
         {
             const std::scoped_lock lock{state->mutex};
-            if(reply == state->reply && !state->aborted) {
-                reply->redirectAllowed();
+            const QUrl origin        = state->request ? state->request->url() : QUrl{};
+            const auto effectivePort = [](const QUrl& value) {
+                return value.port(value.scheme() == "https"_L1 ? 443 : 80);
+            };
+            allowed = reply == state->reply && !state->aborted && !state->sourceLifetime.stop_requested()
+                   && (!state->request
+                       || (origin.scheme() == target.scheme() && origin.host() == target.host()
+                           && effectivePort(origin) == effectivePort(target)));
+            if(!allowed && reply == state->reply) {
+                state->aborted  = true;
+                state->finished = true;
+                state->error    = u"Network stream redirect was rejected."_s;
             }
+        }
+        if(allowed) {
+            reply->redirectAllowed();
+        }
+        else {
+            reply->abort();
+            notifyNetworkStreamState(state);
         }
     });
     QObject::connect(reply, &QNetworkReply::metaDataChanged, reply, [state, reply]() {
@@ -607,6 +633,47 @@ NetworkStreamDevice::NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> 
     , m_state{std::make_shared<NetworkStreamDeviceState>()}
 {
     m_state->streamBuffer.maxBytes = StreamUtils::clampedBufferBytes(maxBufferedBytes);
+}
+
+NetworkStreamDevice::NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> network, QNetworkRequest request,
+                                         qsizetype maxBufferedBytes, std::stop_token sourceLifetime, QObject* parent)
+    : NetworkStreamDevice{std::move(network), request.url(), maxBufferedBytes, parent}
+{
+    m_state->request        = std::move(request);
+    m_state->sourceLifetime = sourceLifetime;
+    m_sourceCancellation    = std::make_unique<std::stop_callback<std::function<void()>>>(
+        sourceLifetime, [weakState = std::weak_ptr{m_state}, network = m_network]() {
+            const auto state = weakState.lock();
+            if(!state) {
+                return;
+            }
+            {
+                const std::scoped_lock lock{state->mutex};
+                state->aborted  = true;
+                state->finished = true;
+                state->error    = u"Cancelled"_s;
+                state->streamBuffer.data.clear();
+                state->readMode.readWouldBlock = false;
+                ++state->requestId;
+            }
+            state->ready.notify_all();
+            QMetaObject::invokeMethod(
+                network.get(),
+                [state]() {
+                    QPointer<QNetworkReply> reply;
+                    {
+                        const std::scoped_lock lock{state->mutex};
+                        reply = state->reply;
+                        state->reply.clear();
+                    }
+                    if(reply) {
+                        reply->abort();
+                        reply->deleteLater();
+                    }
+                    notifyNetworkStreamState(state);
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 NetworkStreamDevice::~NetworkStreamDevice()
@@ -703,10 +770,10 @@ void NetworkStreamDevice::setOpenCallback(std::function<void(QString)> callback)
 bool NetworkStreamDevice::open(OpenMode mode)
 {
     if(isOpen()) {
-        return true;
+        return !m_state->sourceLifetime.stop_requested();
     }
 
-    if(!m_url.isValid() || !(mode & ReadOnly)) {
+    if(m_state->sourceLifetime.stop_requested() || !m_url.isValid() || !(mode & ReadOnly)) {
         setErrorString(u"Invalid network stream."_s);
         return false;
     }
@@ -877,6 +944,11 @@ qint64 NetworkStreamDevice::readData(char* data, qint64 maxSize)
         hasData = m_state->ready.wait(lock, cancellationToken, hasReadableState);
     }
 
+    if(m_state->sourceLifetime.stop_requested()) {
+        lock.unlock();
+        setErrorString(u"Cancelled"_s);
+        return -1;
+    }
     if(cancellationToken.stop_requested()) {
         return -1;
     }
