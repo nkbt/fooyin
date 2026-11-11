@@ -140,6 +140,7 @@ public:
     /** Returns @c true if changes to this playlist's contents are disabled. */
     [[nodiscard]] bool isLocked() const;
     [[nodiscard]] QString sourceLibraryPath() const;
+    [[nodiscard]] QString sourcePlaylistId() const;
     /** Returns the query used to generate this autoplaylist, else an empty string. */
     [[nodiscard]] QString query() const;
     /** Returns the optional sort pattern used to order this autoplaylist. */

@@ -421,7 +421,7 @@ TEST_F(RemoteIoServiceTest, PreservesAuthenticatedStreamRequestHeaders)
     QNetworkRequest request{QUrl{u"https://example.com/audio"_s}};
     request.setRawHeader("Authorization", "Bearer synthetic-session");
 
-    auto pending = service.prepareStream(request, sourceLifetime.get_token());
+    auto pending = service.prepareStream(request, QUrl{u"https://example.com"_s}, sourceLifetime.get_token());
     QCoreApplication::processEvents();
     ASSERT_FALSE(network->lastReply.isNull());
     EXPECT_EQ(network->lastRequest.rawHeader("Authorization"), "Bearer synthetic-session");
@@ -442,7 +442,7 @@ TEST_F(RemoteIoServiceTest, RejectsCrossOriginAuthenticatedStreamRedirects)
     QNetworkRequest request{QUrl{u"https://example.com/audio"_s}};
     request.setRawHeader("Authorization", "Bearer synthetic-session");
 
-    auto pending = service.prepareStream(request, sourceLifetime.get_token());
+    auto pending = service.prepareStream(request, QUrl{u"https://example.com"_s}, sourceLifetime.get_token());
     QCoreApplication::processEvents();
     const auto reply = network->lastReply;
     ASSERT_FALSE(reply.isNull());
@@ -461,7 +461,7 @@ TEST_F(RemoteIoServiceTest, RevokesPreparedSourceWithoutAnotherCompletion)
     RemoteIoService service{network, &m_settings};
     std::stop_source sourceLifetime;
     QNetworkRequest request{QUrl{u"https://example.com/audio"_s}};
-    auto pending = service.prepareStream(request, sourceLifetime.get_token());
+    auto pending = service.prepareStream(request, QUrl{u"https://example.com"_s}, sourceLifetime.get_token());
     int completions{0};
     QObject::connect(pending.get(), &PendingRemoteStream::finished, qApp, [&]() { ++completions; });
     QCoreApplication::processEvents();
@@ -488,7 +488,7 @@ TEST_F(RemoteIoServiceTest, RevokingSourceWakesPreparationWaiterWithoutNetworkEv
     RemoteIoService service{network, &m_settings};
     std::stop_source sourceLifetime;
     QNetworkRequest request{QUrl{u"https://example.com/audio"_s}};
-    auto pending = service.prepareStream(request, sourceLifetime.get_token());
+    auto pending = service.prepareStream(request, QUrl{u"https://example.com"_s}, sourceLifetime.get_token());
     QCoreApplication::processEvents();
     ASSERT_FALSE(network->lastReply.isNull());
     auto waiting = std::async(std::launch::async, [&]() { return pending->waitForReady(5s); });

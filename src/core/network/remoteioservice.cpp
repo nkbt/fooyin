@@ -338,13 +338,14 @@ std::shared_ptr<PendingRemoteStream> RemoteIoService::prepareStream(const QUrl& 
 }
 
 std::shared_ptr<PendingRemoteStream> RemoteIoService::prepareStream(const QNetworkRequest& request,
+                                                                    const QUrl& redirectScope,
                                                                     std::stop_token sourceLifetime) const
 {
     const auto readAheadKb = std::max(1, m_settings->value<Settings::Core::Internal::RemoteReadAheadKb>());
     const auto timeout
         = std::chrono::milliseconds{std::max(1000, m_settings->value<Settings::Core::Internal::RemoteOpenTimeoutMs>())};
-    auto device
-        = std::make_unique<NetworkStreamDevice>(m_networkManager, request, readAheadKb * 1024, sourceLifetime, nullptr);
+    auto device = std::make_unique<NetworkStreamDevice>(m_networkManager, request, redirectScope, readAheadKb * 1024,
+                                                        sourceLifetime, nullptr);
     device->setOpenTimeout(timeout);
     RemoteStreamSource source;
     source.remoteDevice = device.get();
@@ -360,12 +361,12 @@ std::shared_ptr<PendingRemoteStream> RemoteIoService::prepareSource(RemoteStream
     state->network        = m_networkManager;
     state->sourceLifetime = sourceLifetime;
     state->sourceCancellation.emplace(sourceLifetime, [weakState = std::weak_ptr{state}]() {
-        if(const auto state = weakState.lock()) {
+        if(const auto cancelledState = weakState.lock()) {
             {
-                const std::scoped_lock lock{state->mutex};
-                state->ready.notify_all();
+                const std::scoped_lock lock{cancelledState->mutex};
+                cancelledState->ready.notify_all();
             }
-            state->cancellation.request_stop();
+            cancelledState->cancellation.request_stop();
         }
     });
 

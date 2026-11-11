@@ -44,7 +44,8 @@ class FYCORE_EXPORT NetworkStreamDevice : public QIODevice,
 public:
     NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> network, QUrl url, qsizetype maxBufferedBytes,
                         QObject* parent = nullptr);
-    NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> network, QNetworkRequest request,
+    //! Redirects of the request must stay within the scheme, host, port and path of @p redirectScope.
+    NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> network, QNetworkRequest request, QUrl redirectScope,
                         qsizetype maxBufferedBytes, std::stop_token sourceLifetime, QObject* parent);
     ~NetworkStreamDevice() override;
 

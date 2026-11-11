@@ -127,9 +127,13 @@ public:
     /** Advances and returns a track relative to the current index in the active playlist. */
     [[nodiscard]] PlaylistTrack advanceRelativeTrack(Playlist::PlayModes mode, int delta = 1);
 
-    Playlist* applyExternalPlaylist(const QString& sourceLibraryPath, const UId& id, const QString& name,
-                                    const PlaylistTrackList& playlistTracks);
-    void removeExternalPlaylist(const QString& sourceLibraryPath, const UId& id);
+    /** Returns the playlists owned by the source at @p sourceLibraryPath, including hidden ones. */
+    [[nodiscard]] PlaylistList externalPlaylists(const QString& sourceLibraryPath) const;
+    /** Stores or adopts an owned source playlist atomically; returns nullptr on failure. */
+    Playlist* applyExternalPlaylist(const QString& sourceLibraryPath, const QString& sourcePlaylistId,
+                                    const UId& adoptedId, const QString& name, const PlaylistTrackList& playlistTracks);
+    /** Returns false when the source playlist with @p id remains stored. */
+    bool removeExternalPlaylist(const QString& sourceLibraryPath, const UId& id);
     void renamePlaylist(const UId& id, const QString& name);
     /** Enables or disables changes to the contents of the playlist with @p id. */
     void setPlaylistLocked(const UId& id, bool locked);

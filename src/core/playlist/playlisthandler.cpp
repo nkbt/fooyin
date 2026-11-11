@@ -33,6 +33,7 @@
 #include <core/scripting/trackqueryfilter.h>
 #include <utils/async.h>
 #include <utils/crypto.h>
+#include <utils/database/dbtransaction.h>
 #include <utils/helpers.h>
 #include <utils/settings/settingsmanager.h>
 #include <utils/stringcollator.h>
@@ -1377,9 +1378,24 @@ PlaylistTrack PlaylistHandler::advanceRelativeTrack(Playlist::PlayModes mode, in
     return p->nextTrackChange(delta, mode);
 }
 
-Playlist* PlaylistHandler::applyExternalPlaylist(const QString& sourceLibraryPath, const UId& id, const QString& name,
+PlaylistList PlaylistHandler::externalPlaylists(const QString& sourceLibraryPath) const
+{
+    PlaylistList playlists;
+    for(const auto& playlist : p->m_playlists) {
+        if(!sourceLibraryPath.isEmpty() && playlist->sourceLibraryPath() == sourceLibraryPath) {
+            playlists.emplace_back(playlist.get());
+        }
+    }
+    return playlists;
+}
+
+Playlist* PlaylistHandler::applyExternalPlaylist(const QString& sourceLibraryPath, const QString& sourcePlaylistId,
+                                                 const UId& adoptedId, const QString& name,
                                                  const PlaylistTrackList& playlistTracks)
 {
+    if(sourcePlaylistId.isEmpty()) {
+        return nullptr;
+    }
     const auto library = p->m_library->libraryForPath(sourceLibraryPath);
     if(!library || library->path != sourceLibraryPath || !Track::isVirtualPath(sourceLibraryPath)) {
         return nullptr;
@@ -1392,8 +1408,22 @@ Playlist* PlaylistHandler::applyExternalPlaylist(const QString& sourceLibraryPat
             return nullptr;
         }
     }
-    Playlist* playlist = playlistById(id);
-    if(playlist && playlist->sourceLibraryPath() != sourceLibraryPath) {
+    Playlist* playlist{nullptr};
+    for(Playlist* owned : externalPlaylists(sourceLibraryPath)) {
+        if(owned->sourcePlaylistId() == sourcePlaylistId) {
+            if(playlist) {
+                return nullptr;
+            }
+            playlist = owned;
+        }
+    }
+    if(Playlist* adopted = playlistById(adoptedId); !playlist && adopted
+                                                    && adopted->sourceLibraryPath() == sourceLibraryPath
+                                                    && adopted->sourcePlaylistId().isEmpty()) {
+        playlist = adopted;
+    }
+    DbTransaction transaction{p->m_playlistConnector.db()};
+    if(!transaction) {
         return nullptr;
     }
     const bool added = !playlist;
@@ -1403,7 +1433,15 @@ Playlist* PlaylistHandler::applyExternalPlaylist(const QString& sourceLibraryPat
     if(!playlist) {
         return nullptr;
     }
+    const auto discardAdded = [this, added, playlist]() {
+        if(added) {
+            std::erase_if(p->m_playlists, [playlist](const auto& current) { return current.get() == playlist; });
+            p->updateIndices();
+        }
+    };
+    const QString previousSourcePlaylistId{playlist->sourcePlaylistId()};
     playlist->setExtraProperty(u"core/source-library-path"_s, sourceLibraryPath);
+    playlist->setExtraProperty(u"core/source-playlist-id"_s, sourcePlaylistId);
     playlist->setExtraProperty(u"core/source-hidden"_s, isPlaylistVisible(playlist->id()) ? QString{} : u"1"_s);
     PlaylistTrackList sourcePlaylistTracks{playlistTracks};
     for(PlaylistTrack& playlistTrack : sourcePlaylistTracks) {
@@ -1418,6 +1456,7 @@ Playlist* PlaylistHandler::applyExternalPlaylist(const QString& sourceLibraryPat
     playlist->setExtraProperty(u"core/source-playlist-entries"_s,
                                QString::fromUtf8(QJsonDocument{entries}.toJson(QJsonDocument::Compact)));
     p->replacePlaylistTracks(playlist, sourcePlaylistTracks);
+    const QString previousName{playlist->name()};
     if(playlist->name() != name) {
         QStringList playlistNames;
         for(const auto& current : p->m_playlists) {
@@ -1425,14 +1464,23 @@ Playlist* PlaylistHandler::applyExternalPlaylist(const QString& sourceLibraryPat
                 playlistNames.push_back(current->name());
             }
         }
-        const QString newName
-            = Utils::findUniqueString(name, playlistNames, [](const QString& playlistName) { return playlistName; });
-        if(p->m_playlistConnector.renamePlaylist(playlist->dbId(), newName)) {
-            playlist->setName(newName);
-            Q_EMIT playlistRenamed(playlist);
-        }
+        playlist->setName(
+            Utils::findUniqueString(name, playlistNames, [](const QString& playlistName) { return playlistName; }));
     }
-    savePlaylist(playlist->id());
+    p->updateIndices();
+    if(!p->m_playlistConnector.savePlaylist(*playlist) || !transaction.commit()) {
+        // An unsaved source playlist ID would hide the record from legacy adoption on the next attempt.
+        playlist->setExtraProperty(u"core/source-playlist-id"_s, previousSourcePlaylistId);
+        // The nested save clears these flags even when the outer commit then fails.
+        playlist->setModified(true);
+        playlist->setTracksModified(true);
+        playlist->setName(previousName);
+        discardAdded();
+        return nullptr;
+    }
+    if(playlist->name() != previousName) {
+        Q_EMIT playlistRenamed(playlist);
+    }
     if(added && isPlaylistVisible(playlist->id())) {
         Q_EMIT playlistAdded(playlist);
     }
@@ -1442,12 +1490,14 @@ Playlist* PlaylistHandler::applyExternalPlaylist(const QString& sourceLibraryPat
     return playlist;
 }
 
-void PlaylistHandler::removeExternalPlaylist(const QString& sourceLibraryPath, const UId& id)
+bool PlaylistHandler::removeExternalPlaylist(const QString& sourceLibraryPath, const UId& id)
 {
     Playlist* playlist = playlistById(id);
-    if(!playlist || playlist->sourceLibraryPath() != sourceLibraryPath
-       || !p->m_playlistConnector.removePlaylist(playlist->dbId())) {
-        return;
+    if(!playlist || playlist->sourceLibraryPath() != sourceLibraryPath) {
+        return true;
+    }
+    if(!p->m_playlistConnector.removePlaylist(playlist->dbId())) {
+        return false;
     }
     if(playlist == p->m_activePlaylist) {
         p->m_activePlaylist = nullptr;
@@ -1463,6 +1513,7 @@ void PlaylistHandler::removeExternalPlaylist(const QString& sourceLibraryPath, c
     if(p->noConcretePlaylists()) {
         createPlaylist(u"Default"_s, {});
     }
+    return true;
 }
 
 void PlaylistHandler::renamePlaylist(const UId& id, const QString& name)

@@ -84,6 +84,7 @@ struct NetworkStreamDeviceState
 {
     QPointer<QNetworkReply> reply;
     std::optional<QNetworkRequest> request;
+    QUrl redirectScope;
     std::stop_token sourceLifetime;
     std::mutex mutex;
     std::condition_variable_any ready;
@@ -127,6 +128,25 @@ struct NetworkStreamDeviceState
 };
 
 namespace {
+bool isWithinRedirectScope(const QUrl& redirectScope, const QUrl& target)
+{
+    if(target.scheme().compare(redirectScope.scheme(), Qt::CaseInsensitive) != 0
+       || target.host().compare(redirectScope.host(), Qt::CaseInsensitive) != 0 || !target.userInfo().isEmpty()) {
+        return false;
+    }
+    const int defaultPort = redirectScope.scheme().compare("https"_L1, Qt::CaseInsensitive) == 0 ? 443 : 80;
+    if(target.port(defaultPort) != redirectScope.port(defaultPort)) {
+        return false;
+    }
+
+    QString basePath = redirectScope.path();
+    while(basePath.endsWith(u'/')) {
+        basePath.chop(1);
+    }
+    const QString path = target.adjusted(QUrl::NormalizePathSegments).path();
+    return basePath.isEmpty() || path == basePath || path.startsWith(basePath + u'/');
+}
+
 void notifyNetworkStreamState(const std::shared_ptr<NetworkStreamDeviceState>& state)
 {
     state->ready.notify_all();
@@ -551,14 +571,8 @@ void startNetworkStreamRequestOnNetworkThread(const std::shared_ptr<QNetworkAcce
         bool allowed{false};
         {
             const std::scoped_lock lock{state->mutex};
-            const QUrl origin        = state->request ? state->request->url() : QUrl{};
-            const auto effectivePort = [](const QUrl& value) {
-                return value.port(value.scheme() == "https"_L1 ? 443 : 80);
-            };
             allowed = reply == state->reply && !state->aborted && !state->sourceLifetime.stop_requested()
-                   && (!state->request
-                       || (origin.scheme() == target.scheme() && origin.host() == target.host()
-                           && effectivePort(origin) == effectivePort(target)));
+                   && (!state->request || isWithinRedirectScope(state->redirectScope, target));
             if(!allowed && reply == state->reply) {
                 state->aborted  = true;
                 state->finished = true;
@@ -636,10 +650,12 @@ NetworkStreamDevice::NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> 
 }
 
 NetworkStreamDevice::NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> network, QNetworkRequest request,
-                                         qsizetype maxBufferedBytes, std::stop_token sourceLifetime, QObject* parent)
+                                         QUrl redirectScope, qsizetype maxBufferedBytes, std::stop_token sourceLifetime,
+                                         QObject* parent)
     : NetworkStreamDevice{std::move(network), request.url(), maxBufferedBytes, parent}
 {
     m_state->request        = std::move(request);
+    m_state->redirectScope  = std::move(redirectScope);
     m_state->sourceLifetime = sourceLifetime;
     m_sourceCancellation    = std::make_unique<std::stop_callback<std::function<void()>>>(
         sourceLifetime, [weakState = std::weak_ptr{m_state}, network = m_network]() {

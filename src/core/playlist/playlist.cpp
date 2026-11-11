@@ -998,6 +998,12 @@ QString Playlist::sourceLibraryPath() const
     return p->m_extraProps.value("core/source-library-path"_L1);
 }
 
+QString Playlist::sourcePlaylistId() const
+{
+    assertMainThread();
+    return p->m_extraProps.value("core/source-playlist-id"_L1);
+}
+
 QString Playlist::query() const
 {
     assertMainThread();

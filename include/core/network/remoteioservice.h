@@ -129,9 +129,9 @@ public:
 
     //! Begin asynchronous preparation using the configured remote open timeout.
     [[nodiscard]] std::shared_ptr<PendingRemoteStream> prepareStream(const QUrl& url) const;
-    //! Prepare an authenticated stream tied to the lifetime of its source.
-    [[nodiscard]] std::shared_ptr<PendingRemoteStream> prepareStream(const QNetworkRequest& request,
-                                                                     std::stop_token sourceLifetime) const;
+    //! Prepare an authenticated stream tied to the lifetime of its source. Redirects must stay within @p redirectScope.
+    [[nodiscard]] std::shared_ptr<PendingRemoteStream>
+    prepareStream(const QNetworkRequest& request, const QUrl& redirectScope, std::stop_token sourceLifetime) const;
 
     [[nodiscard]] std::shared_ptr<RemoteDownloadHandle>
     download(const QUrl& url, QObject* context, DownloadCallback callback,
