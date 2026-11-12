@@ -17,6 +17,9 @@ if(WIN32)
         COMMENT "Deploying the Qt Test runtime"
     )
     add_dependencies(fooyin_test_runtime fooyin)
+elseif(APPLE)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/run")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 endif()
 
 function(fooyin_add_test name)
@@ -54,6 +57,8 @@ if(WIN32)
 endif()
 
 fooyin_add_test(test_audioconverter core/engine/audioconvertertest.cpp)
+fooyin_add_test(test_accountstore core/accountstoretest.cpp)
+fooyin_add_test(test_fypaths utils/fypathstest.cpp)
 fooyin_add_test(test_audioclock core/engine/audioclocktest.cpp)
 fooyin_add_test(test_conversionpathresolver core/engine/conversion/conversionpathresolvertest.cpp)
 fooyin_add_test(test_conversionrunner core/engine/conversion/conversionrunnertest.cpp)
@@ -140,6 +145,27 @@ if(TARGET fileops)
 endif()
 
 if(TARGET tageditor)
+    target_sources(
+        test_unifiedmusiclibrary
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/settings/tageditorfieldregistry.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorautocompletedelegate.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditoreditor.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditoritem.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditormodel.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorpopulator.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorpropertiestab.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorsettings.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorstats.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorview.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tagfilldialog.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tagfilloperation.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tagfillpattern.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tagfillpreviewmodel.cpp
+    )
+    target_include_directories(test_unifiedmusiclibrary PRIVATE ${CMAKE_SOURCE_DIR}/src/plugins/tageditor)
+    target_compile_definitions(test_unifiedmusiclibrary PRIVATE FOOYIN_TEST_TAGEDITOR)
+
     fooyin_add_test(
         test_tagfillpattern
         plugins/tageditor/tagfillpatterntest.cpp

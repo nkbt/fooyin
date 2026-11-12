@@ -117,7 +117,7 @@ ReplayGainWidget::~ReplayGainWidget()
     saveLayoutData();
 }
 
-void ReplayGainWidget::apply()
+bool ReplayGainWidget::apply()
 {
     commitPendingChanges();
 
@@ -132,6 +132,7 @@ void ReplayGainWidget::apply()
         Q_EMIT writeRequestStarted(m_library->writeTrackMetadata(tracksToWrite));
         m_pendingTracks.clear();
     }
+    return true;
 }
 
 void ReplayGainWidget::setTrackScope(const TrackList& tracks)

@@ -21,8 +21,10 @@
 
 #include "core/coresettings.h"
 #include "tageditoreditor.h"
+#include "tageditorstats.h"
 #include "tagfilldialog.h"
 
+#include <core/library/musiclibrary.h>
 #include <gui/widgets/autoheaderview.h>
 #include <utils/settings/settingsmanager.h>
 
@@ -50,13 +52,15 @@ bool allDbOnlyTracks(const TrackList& tracks)
 } // namespace
 
 TagEditorPropertiesTab::TagEditorPropertiesTab(ActionManager* actionManager, TagEditorFieldRegistry* registry,
-                                               SettingsManager* settings, QWidget* parent)
+                                               MusicLibrary* library, SettingsManager* settings, QWidget* parent)
     : PropertiesTabWidget{parent}
+    , m_library{library}
     , m_settings{settings}
     , m_session{nullptr}
     , m_activeTrackIndex{-1}
     , m_hasPendingMetadataChanges{false}
     , m_hasPendingStatChanges{false}
+    , m_pendingStats{Track::Stat::None}
     , m_editor{new TagEditorEditor(actionManager, registry, settings, this)}
 {
     setObjectName(u"TagEditorPropertiesTab"_s);
@@ -70,6 +74,10 @@ TagEditorPropertiesTab::TagEditorPropertiesTab(ActionManager* actionManager, Tag
                      &TagEditorPropertiesTab::pendingChangesStateChanged);
     QObject::connect(m_editor, &TagEditorEditor::autoFillValuesRequested, this,
                      &TagEditorPropertiesTab::autoFillValues);
+    QObject::connect(m_library, &MusicLibrary::externalLibraryStatsHandlerChanged, this,
+                     &TagEditorPropertiesTab::updateLovedEditable);
+    QObject::connect(m_library, &MusicLibrary::sourceActivationChanged, this,
+                     &TagEditorPropertiesTab::updateLovedEditable);
 
     restoreState();
 }
@@ -86,6 +94,7 @@ void TagEditorPropertiesTab::setTracks(const TrackList& tracks)
     m_activeTrackIndex          = tracks.size() == 1 ? 0 : -1;
     m_hasPendingMetadataChanges = false;
     m_hasPendingStatChanges     = false;
+    m_pendingStats              = Track::Stat::None;
     refreshTrackScope();
 }
 
@@ -122,34 +131,50 @@ bool TagEditorPropertiesTab::commitPendingChanges()
     return true;
 }
 
-void TagEditorPropertiesTab::apply()
+bool TagEditorPropertiesTab::canSaveLoved()
+{
+    if(canSaveTrackStats(m_library, m_pendingTracks, m_pendingStats)) {
+        return true;
+    }
+
+    QMessageBox::warning(
+        this, tr("Unable to Save Changes"),
+        tr("The source of these tracks can’t change Loved at the moment. The changes were not saved."));
+    return false;
+}
+
+bool TagEditorPropertiesTab::apply()
 {
     const TrackList changedTracks = commitCurrentScopeEdits();
     if(!changedTracks.empty()) {
         Q_EMIT tracksChanged(changedTracks);
     }
 
+    if(!canSaveLoved()) {
+        return false;
+    }
     if(m_pendingTracks.empty()) {
-        return;
+        return true;
     }
 
     const bool updateStats = m_hasPendingStatChanges && !m_hasPendingMetadataChanges;
 
     auto applyChanges = [this, updateStats]() {
         if(updateStats) {
-            Q_EMIT trackStatsChanged(m_pendingTracks);
+            Q_EMIT trackStatsChanged(m_pendingTracks, m_pendingStats);
         }
         else {
-            Q_EMIT trackMetadataChanged(m_pendingTracks);
+            Q_EMIT trackMetadataChanged(m_pendingTracks, m_pendingStats);
         }
         m_pendingTracks.clear();
         m_hasPendingMetadataChanges = false;
         m_hasPendingStatChanges     = false;
+        m_pendingStats              = Track::Stat::None;
     };
 
     if(m_settings->fileValue(DontAskAgain).toBool() || allDbOnlyTracks(m_pendingTracks)) {
         applyChanges();
-        return;
+        return true;
     }
 
     QMessageBox message;
@@ -163,12 +188,18 @@ void TagEditorPropertiesTab::apply()
     message.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
     message.setDefaultButton(QMessageBox::No);
 
-    if(message.exec() == QMessageBox::Yes) {
-        if(dontAskAgain->isChecked()) {
-            m_settings->fileSet(DontAskAgain, true);
-        }
-        applyChanges();
+    if(message.exec() != QMessageBox::Yes) {
+        return true;
     }
+    // The source can change while the confirmation runs its event loop.
+    if(!canSaveLoved()) {
+        return false;
+    }
+    if(dontAskAgain->isChecked()) {
+        m_settings->fileSet(DontAskAgain, true);
+    }
+    applyChanges();
+    return true;
 }
 
 void TagEditorPropertiesTab::updateTracks(const TrackList& tracks)
@@ -225,6 +256,7 @@ TrackList TagEditorPropertiesTab::commitCurrentScopeEdits()
     }
 
     const bool statOnly           = m_editor->hasOnlyStatChanges();
+    const Track::Stats stats      = m_editor->changedStats();
     const TrackList changedTracks = m_editor->applyChanges();
 
     if(!m_session) {
@@ -232,6 +264,7 @@ TrackList TagEditorPropertiesTab::commitCurrentScopeEdits()
     }
     mergeTracks(m_pendingTracks, changedTracks);
 
+    m_pendingStats |= stats;
     if(statOnly) {
         m_hasPendingStatChanges = true;
     }
@@ -263,7 +296,13 @@ void TagEditorPropertiesTab::stageTrackChanges(const TrackList& tracks, bool met
 
 void TagEditorPropertiesTab::refreshTrackScope()
 {
+    updateLovedEditable();
     m_editor->setTracks(activeTracks());
+}
+
+void TagEditorPropertiesTab::updateLovedEditable()
+{
+    m_editor->setLovedEditable(canSaveTrackStats(m_library, activeTracks(), Track::Stat::Loved));
 }
 
 TrackList TagEditorPropertiesTab::activeTracks() const

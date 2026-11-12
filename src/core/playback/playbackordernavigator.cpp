@@ -61,7 +61,7 @@ Playlist* PlaybackOrderNavigator::playlistForTrack(const PlaylistTrack& track) c
     }
 
     auto* playlist = m_playlistHandler->playlistById(track.playlistId);
-    if(!playlist) {
+    if(!playlist || !m_playlistHandler->isPlaylistVisible(playlist->id())) {
         return nullptr;
     }
 

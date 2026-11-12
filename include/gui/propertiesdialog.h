@@ -80,7 +80,8 @@ public:
     [[nodiscard]] virtual bool canApply() const;
 
     virtual void load();
-    virtual void apply();
+    //! Returns @c false, after telling the user why, when the pending changes cannot be saved and stay staged.
+    virtual bool apply();
     virtual void finish();
 
     virtual void setSession(PropertiesDialogSession* session);
@@ -117,7 +118,7 @@ public:
     void updateIndex(int index);
     void setVisited(bool visited);
 
-    virtual void apply();
+    virtual bool apply();
     virtual void finish();
 
 private:

@@ -229,7 +229,7 @@ void ArtworkProperties::load()
     loadTrackArtwork();
 }
 
-void ArtworkProperties::apply()
+bool ArtworkProperties::apply()
 {
     TrackCoverData coverData;
     coverData.tracks = m_tracks;
@@ -242,7 +242,7 @@ void ArtworkProperties::apply()
     }
 
     if(coverData.coverData.empty()) {
-        return;
+        return true;
     }
 
     m_writing = true;
@@ -273,6 +273,7 @@ void ArtworkProperties::apply()
         });
 
     Q_EMIT writeRequestStarted(std::move(writeRequest));
+    return true;
 }
 
 void ArtworkProperties::setTrackScope(const TrackList& tracks)

@@ -284,6 +284,7 @@ public:
     void sortGroupedFilters(FilterGroupState& group);
     void scheduleRecompute(const Id& groupId, FilterScrollPolicy scrollPolicy = FilterScrollPolicy::Preserve);
     void scheduleAllRecomputes();
+    void invalidateLibrarySources();
     void schedulePlaylistRecomputes(FilterScrollPolicy scrollPolicy = FilterScrollPolicy::Preserve);
     [[nodiscard]] bool usesCurrentPlaylist(const FilterGroupState& group) const;
     [[nodiscard]] TrackList sourceTracks(const FilterGroupState& group) const;
@@ -867,6 +868,40 @@ void FilterControllerPrivate::scheduleRecompute(const Id& groupId, FilterScrollP
 void FilterControllerPrivate::scheduleAllRecomputes()
 {
     for(const auto& groupId : m_groups | std::views::keys) {
+        scheduleRecompute(groupId);
+    }
+}
+
+void FilterControllerPrivate::invalidateLibrarySources()
+{
+    for(auto& [groupId, group] : m_groups) {
+        if(usesCurrentPlaylist(group)) {
+            continue;
+        }
+        ++group.revision;
+        ++group.patchToken;
+        group.patchStop.request_stop();
+        group.patchRunning = false;
+        group.patchPending = false;
+        group.pendingPatchIds.clear();
+        group.recomputePending = false;
+        group.recomputing      = false;
+        group.sourceTracks.clear();
+        group.finalFilteredTracks.clear();
+        group.hasActiveStages = false;
+        for(int index{0}; auto& stage : group.stages) {
+            stage.revision = group.revision;
+            ++stage.searchRevision;
+            stage.inputTracks.clear();
+            stage.rows.clear();
+            stage.searchedRows.reset();
+            stage.rowLookup.rebuildRows(stage.rows);
+            stage.selectedTracks.clear();
+            stage.isActive                = false;
+            stage.selectionRestorePending = !stage.selectedKeys.empty();
+            publishStage(groupId, index++);
+        }
+        publishGroupResult(groupId);
         scheduleRecompute(groupId);
     }
 }
@@ -1613,6 +1648,8 @@ FilterController::FilterController(ActionManager* actionManager, const CorePlugi
 {
     QObject::connect(p->m_library, &MusicLibrary::visibleLibraryTracksChanged, this,
                      [this]() { p->scheduleAllRecomputes(); });
+    QObject::connect(p->m_library, &MusicLibrary::sourceActivationChanged, this,
+                     [this]() { p->invalidateLibrarySources(); });
     QObject::connect(p->m_library, &MusicLibrary::tracksAdded, this, [this](const TrackList& tracks) {
         if(!p->m_library->hasActiveLibraryFilters()) {
             p->handleLibraryTracksPatched(tracks);

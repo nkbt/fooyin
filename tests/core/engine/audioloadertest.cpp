@@ -132,6 +132,7 @@ struct DecoderState
     QStringList preferredExtensions;
     QStringList supportedSchemes;
     bool supportsRemoteSources{false};
+    uint64_t sourceGeneration{0};
     bool initSucceeds{true};
     bool requireDevice{false};
     bool requireArchiveReader{false};
@@ -185,6 +186,11 @@ public:
     bool supportsRemoteSources() const override
     {
         return m_state->supportsRemoteSources;
+    }
+
+    uint64_t sourceGeneration() const override
+    {
+        return m_state->sourceGeneration;
     }
 
     bool isSeekable() const override
@@ -942,7 +948,8 @@ TEST_F(AudioLoaderTest, LoadsDecoderAndReaderForRegisteredUriSchemeWithoutOpenin
     loader.setRemoteSourceProvider(provider);
 
     addDecoder(loader, u"extension-only-decoder"_s, {u"cdda"_s});
-    const auto decoder = addDecoder(loader, u"cdda-decoder"_s, {}, -1, {u" CDDA "_s});
+    const auto decoder        = addDecoder(loader, u"cdda-decoder"_s, {}, -1, {u" CDDA "_s});
+    decoder->sourceGeneration = 417;
 
     addReader(loader, u"extension-only-reader"_s, {u"cdda"_s});
     const auto reader        = addReader(loader, u"cdda-reader"_s, {}, -1, false, {u"cDdA"_s});
@@ -956,6 +963,7 @@ TEST_F(AudioLoaderTest, LoadsDecoderAndReaderForRegisteredUriSchemeWithoutOpenin
 
     const auto loadedDecoder = loader.loadDecoderForTrack(track);
     ASSERT_NE(loadedDecoder.decoder, nullptr);
+    EXPECT_EQ(loadedDecoder.decoder->sourceGeneration(), 417U);
     EXPECT_EQ(track.filepath(), loadedDecoder.input.source.filepath);
     EXPECT_EQ(nullptr, loadedDecoder.input.source.device);
     EXPECT_EQ(nullptr, loadedDecoder.input.device.get());

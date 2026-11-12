@@ -52,8 +52,10 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QPointer>
+#include <QSignalBlocker>
 #include <QTabBar>
 #include <QTimer>
+#include <algorithm>
 
 #if (QT_VERSION >= QT_VERSION_CHECK(6, 5, 0))
 #include <chrono>
@@ -244,11 +246,22 @@ void PlaylistTabs::setupTabs()
 
 int PlaylistTabs::addPlaylist(const Playlist* playlist)
 {
-    if(!playlist) {
+    if(!playlist || !m_playlistHandler->isPlaylistVisible(playlist->id())) {
         return -1;
     }
-
-    const int index = addNewTab(playlistTitle(playlist, m_config.titleScript));
+    for(int index{0}; index < m_tabs->count(); ++index) {
+        if(m_tabs->tabBar()->tabData(index).value<UId>() == playlist->id()) {
+            return index;
+        }
+    }
+    const auto visiblePlaylists = m_playlistHandler->playlists();
+    const auto position         = std::ranges::find(visiblePlaylists, playlist);
+    if(position == visiblePlaylists.end()) {
+        return -1;
+    }
+    const int row = static_cast<int>(std::distance(visiblePlaylists.begin(), position));
+    const QSignalBlocker tabSignals{m_tabs};
+    const int index = m_tabs->insertTab(row, playlistTitle(playlist, m_config.titleScript));
     if(index >= 0) {
         m_tabs->tabBar()->setTabData(index, QVariant::fromValue(playlist->id()));
         updateTabIcon(index, Player::PlayState::Stopped);
@@ -256,8 +269,33 @@ int PlaylistTabs::addPlaylist(const Playlist* playlist)
             m_tabs->setCurrentIndex(index);
         }
     }
-
     return index;
+}
+
+void PlaylistTabs::syncTabs()
+{
+    const auto visiblePlaylists = m_playlistHandler->playlists();
+    const QSignalBlocker tabSignals{m_tabs};
+    const UId currentPlaylistId = m_tabs->tabBar()->tabData(m_tabs->currentIndex()).value<UId>();
+    for(int row{0}; const auto* playlist : visiblePlaylists) {
+        for(int index{0}; index < m_tabs->count(); ++index) {
+            if(m_tabs->tabBar()->tabData(index).value<UId>() == playlist->id()) {
+                if(index != row) {
+                    m_tabs->tabBar()->moveTab(index, row);
+                }
+                break;
+            }
+        }
+        ++row;
+    }
+    if(currentPlaylistId.isValid()) {
+        for(int index{0}; index < m_tabs->count(); ++index) {
+            if(m_tabs->tabBar()->tabData(index).value<UId>() == currentPlaylistId) {
+                m_tabs->setCurrentIndex(index);
+                break;
+            }
+        }
+    }
 }
 
 void PlaylistTabs::removePlaylist(const Playlist* playlist)
@@ -524,10 +562,18 @@ void PlaylistTabs::contextMenuEvent(QContextMenuEvent* event)
             = new QAction(playlist->isAutoPlaylist() ? tr("Rename autoplaylist") : tr("Rename playlist"), menu);
         QObject::connect(renameAction, &QAction::triggered, tabBar, [tabBar, index] { tabBar->showEditor(index); });
 
+        renameAction->setEnabled(playlist->sourceLibraryPath().isEmpty());
+        renameAction->setToolTip(playlist->sourceLibraryPath().isEmpty()
+                                     ? renameAction->text()
+                                     : tr("Playlist is managed by the library source"));
         menu->addAction(renameAction);
 
         if(!playlist->isAutoPlaylist()) {
             auto* lockAction = new QAction(m_lockedIcon, tr("Lock playlist"), menu);
+            lockAction->setEnabled(playlist->sourceLibraryPath().isEmpty());
+            lockAction->setToolTip(playlist->sourceLibraryPath().isEmpty()
+                                       ? tr("Lock playlist")
+                                       : tr("Playlist is managed by the library source"));
             lockAction->setCheckable(true);
             lockAction->setChecked(playlist->isLocked());
             QObject::connect(lockAction, &QAction::toggled, this,
@@ -596,6 +642,10 @@ void PlaylistTabs::contextMenuEvent(QContextMenuEvent* event)
             QObject::connect(removeAction, &QAction::triggered, this,
                              [this, id]() { m_playlistController->removePlaylist(id, this); });
 
+            removeAction->setEnabled(playlist->sourceLibraryPath().isEmpty());
+            removeAction->setToolTip(playlist->sourceLibraryPath().isEmpty()
+                                         ? removeAction->text()
+                                         : tr("Playlist is managed by the library source"));
             menu->addAction(removeAction);
         }
 
@@ -804,6 +854,8 @@ void PlaylistTabs::setupConnections()
     QObject::connect(m_playlistHandler, &PlaylistHandler::activePlaylistChanged, this,
                      &PlaylistTabs::activePlaylistChanged);
     QObject::connect(m_playlistHandler, &PlaylistHandler::playlistAdded, this, &PlaylistTabs::addPlaylist);
+    QObject::connect(m_playlistHandler, &PlaylistHandler::playlistIndexChanged, this,
+                     [this](Playlist*) { syncTabs(); });
     QObject::connect(m_playlistHandler, &PlaylistHandler::playlistRemoved, this, &PlaylistTabs::removePlaylist);
     QObject::connect(m_playlistHandler, &PlaylistHandler::playlistRenamed, this, &PlaylistTabs::refreshTabTitle);
     QObject::connect(m_playlistHandler, &PlaylistHandler::playlistUpdated, this, &PlaylistTabs::playlistUpdated);
@@ -866,12 +918,18 @@ void PlaylistTabs::tabChanged(int index) const
     }
 }
 
-void PlaylistTabs::tabMoved(int /*from*/, int to) const
+void PlaylistTabs::tabMoved(int from, int to) const
 {
-    const auto id = m_tabs->tabBar()->tabData(to).value<UId>();
-    if(id.isValid()) {
-        m_playlistController->changePlaylistIndex(id, to);
+    const auto visiblePlaylists = m_playlistHandler->playlists();
+    if(from < 0 || to < 0 || std::cmp_greater_equal(from, visiblePlaylists.size())
+       || std::cmp_greater_equal(to, visiblePlaylists.size()) || to >= m_tabs->count()) {
+        return;
     }
+    const UId playlistId = m_tabs->tabBar()->tabData(to).value<UId>();
+    if(!playlistId.isValid() || visiblePlaylists.at(static_cast<size_t>(from))->id() != playlistId) {
+        return;
+    }
+    m_playlistController->changePlaylistIndex(playlistId, visiblePlaylists.at(static_cast<size_t>(to))->index());
 }
 
 void PlaylistTabs::playlistChanged(Playlist* oldPlaylist, Playlist* playlist)

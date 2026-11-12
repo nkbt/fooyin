@@ -295,11 +295,17 @@ void PlaylistBox::updateActionState()
     }
     if(m_renameAction) {
         m_renameAction->setText(isAuto ? tr("Re&name autoplaylist") : tr("Re&name playlist"));
-        m_renameAction->setEnabled(hasPlaylist);
+        m_renameAction->setEnabled(hasPlaylist && currentPlaylist()->sourceLibraryPath().isEmpty());
+        m_renameAction->setToolTip(hasPlaylist && !currentPlaylist()->sourceLibraryPath().isEmpty()
+                                       ? tr("Playlist is managed by the library source")
+                                       : tr("Rename playlist"));
     }
     if(m_removeAction) {
         m_removeAction->setText(isAuto ? tr("&Remove autoplaylist") : tr("&Remove playlist"));
-        m_removeAction->setEnabled(hasPlaylist);
+        m_removeAction->setEnabled(hasPlaylist && currentPlaylist()->sourceLibraryPath().isEmpty());
+        m_removeAction->setToolTip(hasPlaylist && !currentPlaylist()->sourceLibraryPath().isEmpty()
+                                       ? tr("Playlist is managed by the library source")
+                                       : tr("Remove playlist"));
     }
 }
 

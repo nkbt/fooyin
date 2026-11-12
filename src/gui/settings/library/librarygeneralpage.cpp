@@ -247,7 +247,10 @@ void LibraryGeneralPageWidget::load()
 
 void LibraryGeneralPageWidget::apply()
 {
-    m_model->processQueue();
+    if(const QStringList librariesNotRemoved = m_model->processQueue(); !librariesNotRemoved.empty()) {
+        QMessageBox::warning(this, tr("Remove Library"),
+                             tr("These libraries could not be removed: %1.").arg(librariesNotRemoved.join(u", "_s)));
+    }
 
     m_settings->fileSet(Settings::Core::Internal::LibraryRestrictTypes,
                         m_restrictTypes->text().split(u';', Qt::SkipEmptyParts));

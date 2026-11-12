@@ -20,6 +20,7 @@
 #include "tageditorpanel.h"
 
 #include "tageditoreditor.h"
+#include "tageditorstats.h"
 #include "tagfilldialog.h"
 
 #include <core/engine/audioloader.h>
@@ -72,6 +73,9 @@ TagEditorPanel::TagEditorPanel(ActionManager* actionManager, TagEditorFieldRegis
     QObject::connect(m_editor, &TagEditorEditor::autoFillValuesRequested, this, &TagEditorPanel::autoFillValues);
     QObject::connect(m_selectionController, &TrackSelectionController::displaySelectionChanged, this,
                      &TagEditorPanel::selectionChanged);
+    QObject::connect(m_library, &MusicLibrary::externalLibraryStatsHandlerChanged, this,
+                     &TagEditorPanel::updateLovedEditable);
+    QObject::connect(m_library, &MusicLibrary::sourceActivationChanged, this, &TagEditorPanel::updateLovedEditable);
 
     selectionChanged();
 }
@@ -134,8 +138,20 @@ bool TagEditorPanel::apply()
         return true;
     }
 
-    const bool statOnly = m_editor->hasOnlyStatChanges();
-    const auto stats    = m_editor->changedStats();
+    const bool statOnly     = m_editor->hasOnlyStatChanges();
+    const auto stats        = m_editor->changedStats();
+    const auto canSaveLoved = [this, &stats]() {
+        if(canSaveTrackStats(m_library, m_currentTracks, stats)) {
+            return true;
+        }
+        QMessageBox::warning(
+            this, tr("Unable to Save Changes"),
+            tr("The source of these tracks can’t change Loved at the moment. The changes were not saved."));
+        return false;
+    };
+    if(!canSaveLoved()) {
+        return false;
+    }
     if(!statOnly && !allDbOnlyTracks(m_currentTracks) && !m_settings->fileValue(DontAskAgain).toBool()) {
         QMessageBox message;
         message.setIcon(QMessageBox::Warning);
@@ -151,6 +167,10 @@ bool TagEditorPanel::apply()
         if(message.exec() != QMessageBox::Yes) {
             return false;
         }
+        // The source can change while the confirmation runs its event loop.
+        if(!canSaveLoved()) {
+            return false;
+        }
         if(dontAskAgain->isChecked()) {
             m_settings->fileSet(DontAskAgain, true);
         }
@@ -162,10 +182,10 @@ bool TagEditorPanel::apply()
     }
 
     if(statOnly) {
-        m_library->updateTrackStats(changedTracks, stats);
+        saveTrackStats(m_library, changedTracks, stats);
     }
     else {
-        m_library->writeTrackMetadata(changedTracks);
+        saveTrackMetadata(m_library, changedTracks, stats);
     }
 
     return true;
@@ -215,7 +235,13 @@ void TagEditorPanel::updateForTracks(const TrackList& tracks)
           });
     m_applyButton->setEnabled(canWrite);
     m_editor->setReadOnly(!canWrite);
+    updateLovedEditable();
     m_editor->setTracks(tracks);
+}
+
+void TagEditorPanel::updateLovedEditable()
+{
+    m_editor->setLovedEditable(canSaveTrackStats(m_library, m_currentTracks, Track::Stat::Loved));
 }
 
 } // namespace Fooyin::TagEditor

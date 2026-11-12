@@ -38,6 +38,7 @@ public:
     [[nodiscard]] bool supportsRemoteSources() const override;
     [[nodiscard]] bool needsMoreInput() const override;
     [[nodiscard]] bool isSeekable() const override;
+    [[nodiscard]] uint64_t sourceGeneration() const override;
     [[nodiscard]] bool allowsConcurrentDecoding() const override;
     [[nodiscard]] int playbackPrebufferMs() const override;
     [[nodiscard]] QStringList takeWarnings() override;

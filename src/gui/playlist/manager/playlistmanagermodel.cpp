@@ -333,15 +333,22 @@ void PlaylistManagerModel::populate()
 
 void PlaylistManagerModel::addPlaylist(Playlist* playlist)
 {
-    if(!playlist) {
+    if(!playlist || rowForPlaylist(playlist) >= 0) {
         return;
     }
-
-    const int row = static_cast<int>(m_playlists.size());
-
+    const auto visiblePlaylists = m_playlistHandler->playlists();
+    const auto position         = std::ranges::find(visiblePlaylists, playlist);
+    if(position == visiblePlaylists.end()) {
+        return;
+    }
+    const int row = static_cast<int>(std::distance(visiblePlaylists.begin(), position));
+    if(std::cmp_greater(row, m_playlists.size())) {
+        populate();
+        return;
+    }
     beginInsertRows({}, row, row);
-    m_playlists.push_back(playlist);
-    m_summaries.push_back(summarisePlaylist(playlist));
+    m_playlists.insert(m_playlists.begin() + row, playlist);
+    m_summaries.insert(m_summaries.begin() + row, summarisePlaylist(playlist));
     endInsertRows();
 }
 
@@ -351,17 +358,22 @@ void PlaylistManagerModel::reorderPlaylist(Playlist* playlist)
     if(from < 0) {
         return;
     }
-
-    const int to = playlist->index();
-    if(to == from) {
+    const auto visiblePlaylists = m_playlistHandler->playlists();
+    const auto position         = std::ranges::find(visiblePlaylists, playlist);
+    if(position == visiblePlaylists.end()) {
         return;
     }
-
-    const int destRow = (to > from) ? (to + 1) : to;
-
-    beginMoveRows({}, from, from, {}, destRow);
-    Utils::move(m_playlists, from, to);
-    Utils::move(m_summaries, from, to);
+    const int to = static_cast<int>(std::distance(visiblePlaylists.begin(), position));
+    if(to == from || std::cmp_greater_equal(to, m_playlists.size()) || std::cmp_greater_equal(from, m_summaries.size())
+       || std::cmp_greater_equal(to, m_summaries.size())) {
+        return;
+    }
+    const int destination = to > from ? to + 1 : to;
+    if(!beginMoveRows({}, from, from, {}, destination)) {
+        return;
+    }
+    Utils::move(m_playlists, static_cast<size_t>(from), static_cast<size_t>(to));
+    Utils::move(m_summaries, static_cast<size_t>(from), static_cast<size_t>(to));
     endMoveRows();
 }
 

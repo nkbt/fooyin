@@ -21,6 +21,7 @@
 
 #include "fycore_export.h"
 
+#include <core/library/libraryinfo.h>
 #include <core/track.h>
 #include <utils/database/dbmodule.h>
 
@@ -28,6 +29,7 @@
 
 #include <expected>
 #include <memory>
+#include <optional>
 #include <set>
 
 namespace Fooyin {
@@ -41,6 +43,19 @@ public:
     void setMetadataStore(std::shared_ptr<TrackMetadataStore> store);
 
     bool storeTracks(TrackList& tracks);
+    /*!
+     * Inserts @p addedTracks and updates @p updatedTracks in one transaction while @p library is still registered.
+     * Fails without changes if a track belongs to another library. Statistics in @p sourceStats replace the stored
+     * values of tracks in @p library; other statistics keep their stored values. Both lists are reloaded as stored.
+     * Only the @p sourceStats of @p unchangedTracks are stored, so storage matches the source after an earlier failure.
+     */
+    bool storeExternalSnapshot(const LibraryInfo& library, TrackList& addedTracks, TrackList& updatedTracks,
+                               const TrackList& unchangedTracks, Track::Stats sourceStats);
+    /*!
+     * Replaces the stored @p sourceStats of @p tracks in one transaction while @p library is still registered.
+     * Fails without changes if a track does not belong to @p library. The tracks are reloaded as stored.
+     */
+    bool storeExternalTrackStats(const LibraryInfo& library, TrackList& tracks, Track::Stats sourceStats);
     bool updateTracks(TrackList& tracks);
     std::expected<void, QString> writeScanBatch(TrackList& tracksToStore, TrackList& tracksToUpdate);
 
@@ -57,7 +72,10 @@ public:
 
     bool deleteTrack(int id);
     bool deleteTracks(const TrackList& tracks);
-    std::set<int> deleteLibraryTracks(int libraryId);
+    /*!
+     * Deletes the tracks of @p library that no playlist references and detaches the others. For an external library, it also clears the source-owned statistics of every stored track from that source, including tracks detached earlier. Returns the deleted track ids, or std::nullopt if a query fails. Callers provide the transaction.
+     */
+    std::optional<std::set<int>> deleteLibraryTracks(const LibraryInfo& library);
 
     void cleanupTracks();
 
@@ -66,6 +84,8 @@ public:
 
 private:
     [[nodiscard]] int trackCount() const;
+    bool storeTrack(Track& track, Track::Stats sourceStats);
+    bool updateTrackData(const Track& track);
     bool insertTrack(Track& track, bool ignoreDuplicates = false) const;
 
     struct StoredTrackStats
@@ -78,8 +98,8 @@ private:
         bool loved{false};
     };
     std::optional<StoredTrackStats> existingTrackStats(const QString& hash) const;
-    bool insertOrUpdateStats(const Track& track, StoredTrackStats* mergedStats = nullptr,
-                             Track::Stats updatedStats = Track::Stat::All) const;
+    bool insertOrUpdateStats(const Track& track, StoredTrackStats* mergedStats, Track::Stats updatedStats,
+                             Track::Stats sourceStats) const;
 
     void removeUnmanagedTracks() const;
     void updateLastSeenStats() const;

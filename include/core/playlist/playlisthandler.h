@@ -127,6 +127,17 @@ public:
     /** Advances and returns a track relative to the current index in the active playlist. */
     [[nodiscard]] PlaylistTrack advanceRelativeTrack(Playlist::PlayModes mode, int delta = 1);
 
+    /** Returns the playlists owned by the source at @p sourceLibraryPath, including hidden ones. */
+    [[nodiscard]] PlaylistList externalPlaylists(const QString& sourceLibraryPath) const;
+    /*!
+     * Stores or adopts an owned source playlist in one database transaction and returns it.
+     *
+     * Returns nullptr on failure and leaves the database unchanged. A new playlist is then discarded, while the tracks and name applied to an existing playlist stay visible as unsaved changes until a later apply or playlist save.
+     */
+    Playlist* applyExternalPlaylist(const QString& sourceLibraryPath, const QString& sourcePlaylistId,
+                                    const UId& adoptedId, const QString& name, const PlaylistTrackList& playlistTracks);
+    /** Returns false when the source playlist with @p id remains stored. */
+    bool removeExternalPlaylist(const QString& sourceLibraryPath, const UId& id);
     void renamePlaylist(const UId& id, const QString& name);
     /** Enables or disables changes to the contents of the playlist with @p id. */
     void setPlaylistLocked(const UId& id, bool locked);
@@ -141,6 +152,7 @@ public:
     [[nodiscard]] Playlist* activePlaylist() const;
 
     [[nodiscard]] int playlistCount() const;
+    [[nodiscard]] bool isPlaylistVisible(const UId& id) const;
     /** Prime upcoming track state/metadata for seamless transition preparation. */
     void prepareUpcomingTrack();
 

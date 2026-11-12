@@ -19,6 +19,7 @@
 
 #include "unifiedmusiclibrary.h"
 
+#include "database/databasehelpers.h"
 #include "internalcoresettings.h"
 #include "library/librarymanager.h"
 #include "libraryscanutils.h"
@@ -44,6 +45,7 @@
 
 #include <deque>
 #include <functional>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <unordered_map>
@@ -72,6 +74,22 @@ int removedTrackCount(const TrackList& tracks)
 {
     return static_cast<int>(
         std::ranges::count_if(tracks, [](const Track& track) { return !track.isEnabled() || !track.isInLibrary(); }));
+}
+
+bool isExternalLibrary(const LibraryInfo& library)
+{
+    return Track::isVirtualPath(library.path);
+}
+
+LibraryInfoMap filesystemLibraries(const LibraryInfoMap& libraries)
+{
+    LibraryInfoMap filesystemLibraries;
+    for(const auto& [id, library] : libraries) {
+        if(!isExternalLibrary(library)) {
+            filesystemLibraries.emplace(id, library);
+        }
+    }
+    return filesystemLibraries;
 }
 
 std::optional<std::pair<int, QString>> monitoredTrackPath(const Track& track)
@@ -103,7 +121,10 @@ Track mergeTrackUpdate(const Track& currentTrack, const Track& updatedTrack, Lib
             mergedTrack.setIsEnabled(updatedTrack.isEnabled());
             break;
         case LibraryTrackUpdateType::Stats:
-            mergeTrackStats(mergedTrack, updatedTrack, Track::Stat::All);
+            mergeTrackStats(mergedTrack, updatedTrack,
+                            currentTrack.externalLibraryPath().isEmpty()
+                                ? Track::Stat::All
+                                : updatedStats & ~currentTrack.readOnlyStats());
             mergedTrack.setModifiedTime(updatedTrack.modifiedTime());
             if(updatedStats.testFlag(Track::Stat::Rating)) {
                 const QString writeTag = ratingTagPolicy().effectiveWriteTag();
@@ -218,6 +239,44 @@ private:
     std::unordered_map<TrackPathKey, size_t, TrackPathKeyHash> m_byPathWithoutId;
 };
 
+struct ExternalStatsHandler
+{
+    Track::Stats stats;
+    QPointer<QObject> handler;
+};
+
+// Each stat records the publication that last set it, so that an older commit settles only the stats it still owns.
+struct PendingExternalStats
+{
+    Track published;
+    uint64_t lovedGeneration{0};
+    uint64_t ratingGeneration{0};
+    uint64_t playcountGeneration{0};
+};
+
+Track::Stats pendingStats(const PendingExternalStats& pending)
+{
+    Track::Stats stats;
+    stats.setFlag(Track::Stat::Loved, pending.lovedGeneration != 0);
+    stats.setFlag(Track::Stat::Rating, pending.ratingGeneration != 0);
+    stats.setFlag(Track::Stat::Playcount, pending.playcountGeneration != 0);
+    return stats;
+}
+
+bool statChanged(const Track& track, const Track& otherTrack, const Track::Stat stat)
+{
+    switch(stat) {
+        case Track::Stat::Loved:
+            return track.isLoved() != otherTrack.isLoved();
+        case Track::Stat::Rating:
+            return track.rating() != otherTrack.rating();
+        case Track::Stat::Playcount:
+            return track.playCount() != otherTrack.playCount() || track.firstPlayed() != otherTrack.firstPlayed()
+                || track.lastPlayed() != otherTrack.lastPlayed();
+        default:
+            return false;
+    }
+}
 } // namespace
 
 class UnifiedMusicLibraryPrivate
@@ -275,6 +334,15 @@ public:
                                               Track::Stats updatedStats = Track::Stat::None) const;
 
     QCoro::Task<> commitRemoveLibrary(LibraryInfo library, std::set<int> tracksRemoved);
+    [[nodiscard]] bool isRegisteredExternalLibrary(const LibraryInfo& library) const;
+    QCoro::Task<> commitApplyExternalLibrarySnapshot(LibraryInfo library, TrackList snapshotTracks, QUuid operation);
+    [[nodiscard]] std::optional<TrackList>
+    publishExternalTrackStats(const LibraryInfo& library, const TrackList& reportedTracks, Track::Stats sourceStats);
+    void publishTrackStats(const TrackList& tracks, Track::Stats stats);
+    void applyPendingExternalStats(TrackList& tracks) const;
+    QCoro::Task<> commitApplyExternalTrackStats(LibraryInfo library, TrackList publishedTracks,
+                                                Track::Stats sourceStats, QUuid operation, uint64_t generation);
+    [[nodiscard]] Track::Stats handledStats(const Track& canonical) const;
     void removeLibrary(const LibraryInfo& library, const std::set<int>& tracksRemoved);
     void libraryStatusChanged(const LibraryInfo& library) const;
 
@@ -294,6 +362,9 @@ public:
     std::optional<QCoro::Task<>> m_activeCommitTask;
     std::unordered_map<int, ScanSummaryCounts> m_scanSummaries;
     std::unordered_set<int> m_failedScans;
+    std::unordered_map<int, ExternalStatsHandler> m_externalStatsHandlers;
+    std::unordered_map<int, PendingExternalStats> m_pendingExternalStats;
+    uint64_t m_externalStatsGeneration{0};
 };
 
 UnifiedMusicLibraryPrivate::UnifiedMusicLibraryPrivate(UnifiedMusicLibrary* self, LibraryManager* libraryManager,
@@ -368,6 +439,8 @@ void UnifiedMusicLibraryPrivate::attachMetadataStore(TrackList& tracks) const
 void UnifiedMusicLibraryPrivate::setTracks(TrackList tracks)
 {
     m_tracks = std::move(tracks);
+    // A commit can copy the library before a publication and finish after it.
+    applyPendingExternalStats(m_tracks);
 
     m_trackIndices.clear();
     m_trackIndices.reserve(m_tracks.size());
@@ -398,7 +471,8 @@ void UnifiedMusicLibraryPrivate::setupLibraryWatchers()
     const bool monitorDirs       = m_settings->value<Settings::Core::Internal::MonitorLibraryDirectories>();
     const bool monitorTrackFiles = monitorDirs && m_settings->value<Settings::Core::Internal::MonitorTrackFiles>();
 
-    m_threadHandler.setupWatchers(m_libraryManager->allLibraries(), monitorDirs, monitorTrackFiles);
+    m_threadHandler.setupWatchers(filesystemLibraries(m_libraryManager->allLibraries()), monitorDirs,
+                                  monitorTrackFiles);
 }
 
 void UnifiedMusicLibraryPrivate::processNextCommit()
@@ -688,7 +762,7 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitUpdateTracksStats(TrackList trac
     attachMetadataStore(tracksToUpdate);
     TrackList mergedTracks = mergeTrackUpdates(tracksToUpdate, LibraryTrackUpdateType::Stats, stats);
 
-    const TrackList sortedTracks = co_await sortTracks(librarySortScript(), std::move(mergedTracks));
+    TrackList sortedTracks = co_await sortTracks(librarySortScript(), std::move(mergedTracks));
 
     if(!lifetime) {
         co_return;
@@ -724,6 +798,11 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitUpdateTracksStats(TrackList trac
     if(!lifetime) {
         co_return;
     }
+
+    applyPendingExternalStats(sortedTracks);
+    applyPendingExternalStats(ratingsChanged);
+    applyPendingExternalStats(playcountsChanged);
+    applyPendingExternalStats(lovedChanged);
 
     Q_EMIT m_self->tracksUpdated(sortedTracks);
     if(!ratingsChanged.empty()) {
@@ -896,6 +975,8 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitRemoveLibrary(LibraryInfo librar
     remainingTracks.reserve(m_tracks.size());
     removedTracks.reserve(tracksRemoved.size());
 
+    const bool isExternal = isExternalLibrary(library);
+
     for(auto& track : m_tracks) {
         const bool isInRemovedLibrary = track.libraryId() == library.id;
 
@@ -904,8 +985,16 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitRemoveLibrary(LibraryInfo librar
             continue;
         }
 
+        const bool hasSourceStats
+            = isExternal && track.externalLibraryPath() == library.path && track.readOnlyStats() != Track::Stat::None;
+
         if(isInRemovedLibrary) {
             track.setLibraryId(-1);
+        }
+        if(hasSourceStats) {
+            track.setReadOnlyStats(Track::Stat::None);
+        }
+        if(isInRemovedLibrary || hasSourceStats) {
             updatedTracks.push_back(track);
         }
 
@@ -922,7 +1011,367 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitRemoveLibrary(LibraryInfo librar
     }
 
     setupLibraryWatchers();
-    co_return;
+}
+
+bool UnifiedMusicLibraryPrivate::isRegisteredExternalLibrary(const LibraryInfo& library) const
+{
+    const auto currentLibrary = m_libraryManager->libraryInfo(library.id);
+    return currentLibrary && currentLibrary->path == library.path && isExternalLibrary(library);
+}
+
+QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalLibrarySnapshot(LibraryInfo library,
+                                                                             TrackList snapshotTracks, QUuid operation)
+{
+    const QPointer lifetime{m_self};
+
+    if(operation.isNull() || !isRegisteredExternalLibrary(library)) {
+        qCWarning(LIBRARY) << "Rejected snapshot for unknown external library" << library.id;
+        Q_EMIT m_self->externalLibrarySnapshotFinished(operation, library.id, false);
+
+        co_return;
+    }
+
+    const Track::Stats sourceStats
+        = Track::Stats::fromInt(m_settings->fileValue(u"ExternalLibraries/ReadOnlyStats/"_s + library.path).toInt());
+    const QString pathPrefix = library.path + u'/';
+
+    std::unordered_map<QString, Track> existingTracks;
+    std::unordered_set<QString> foreignPaths;
+    for(const Track& track : m_tracks) {
+        const bool isInNamespace = track.filepath().startsWith(pathPrefix);
+        if(track.libraryId() == library.id || (track.libraryId() < 0 && isInNamespace)) {
+            existingTracks.emplace(track.uniqueFilepath(), track);
+        }
+        else if(isInNamespace) {
+            foreignPaths.emplace(track.uniqueFilepath());
+        }
+    }
+
+    TrackList addedTracks;
+    TrackList updatedTracks;
+    TrackList unchangedTracks;
+    std::unordered_set<QString> snapshotPaths;
+
+    for(Track& track : snapshotTracks) {
+        if(!track.filepath().startsWith(pathPrefix) || track.filepath().size() == pathPrefix.size()
+           || !snapshotPaths.emplace(track.uniqueFilepath()).second) {
+            qCWarning(LIBRARY) << "Rejected external library snapshot with an invalid or duplicate track path";
+            Q_EMIT m_self->externalLibrarySnapshotFinished(operation, library.id, false);
+
+            co_return;
+        }
+
+        if(foreignPaths.contains(track.uniqueFilepath())) {
+            qCWarning(LIBRARY) << "Rejected external library snapshot with a track of another library";
+            Q_EMIT m_self->externalLibrarySnapshotFinished(operation, library.id, false);
+
+            co_return;
+        }
+
+        track.setExternalLibraryPath(library.path);
+        track.setReadOnlyStats(sourceStats);
+        track.setLibraryId(library.id);
+        track.setIsEnabled(true);
+        track.setMetadataWasRead(true);
+
+        const auto existing = existingTracks.find(track.uniqueFilepath());
+        if(existing == existingTracks.end()) {
+            track.setId(-1);
+            track.generateHash();
+            addedTracks.push_back(track);
+            continue;
+        }
+
+        // The database keeps the stored values of statistics that the source does not own.
+        const Track& existingTrack = existing->second;
+        track.setId(existingTrack.id());
+        track.setAddedTime(existingTrack.addedTime());
+        track.generateHash();
+
+        const bool lovedChanged
+            = sourceStats.testFlag(Track::Stat::Loved) && existingTrack.isLoved() != track.isLoved();
+        const bool ratingChanged
+            = sourceStats.testFlag(Track::Stat::Rating) && existingTrack.rating() != track.rating();
+        const bool playsChanged
+            = sourceStats.testFlag(Track::Stat::Playcount)
+           && (existingTrack.playCount() != track.playCount() || existingTrack.firstPlayed() != track.firstPlayed()
+               || existingTrack.lastPlayed() != track.lastPlayed());
+        if(!existingTrack.isEnabled() || Database::trackBindings(existingTrack) != Database::trackBindings(track)
+           || lovedChanged || ratingChanged || playsChanged) {
+            updatedTracks.push_back(track);
+        }
+        else if(sourceStats != Track::Stat::None) {
+            unchangedTracks.push_back(track);
+        }
+    }
+
+    for(const Track& existingTrack : existingTracks | std::views::values) {
+        if(existingTrack.libraryId() == library.id && !snapshotPaths.contains(existingTrack.uniqueFilepath())) {
+            Track detachedTrack{existingTrack};
+            detachedTrack.setLibraryId(-1);
+            detachedTrack.setIsEnabled(false);
+            updatedTracks.push_back(detachedTrack);
+        }
+    }
+
+    const auto storeFuture = m_threadHandler.storeExternalLibrarySnapshot(library, addedTracks, updatedTracks,
+                                                                          unchangedTracks, sourceStats);
+    co_await qCoro(QFuture<void>{storeFuture}).waitForFinished();
+
+    if(!lifetime) {
+        co_return;
+    }
+
+    if(storeFuture.resultCount() == 0 || !storeFuture.result()) {
+        Q_EMIT m_self->externalLibrarySnapshotFinished(operation, library.id, false);
+
+        co_return;
+    }
+
+    auto [storedAddedTracks, storedUpdatedTracks] = *storeFuture.result();
+
+    attachMetadataStore(storedAddedTracks);
+    attachMetadataStore(storedUpdatedTracks);
+
+    const TrackList sortedAddedTracks = co_await sortTracks(librarySortScript(), std::move(storedAddedTracks));
+    if(!lifetime) {
+        co_return;
+    }
+
+    TrackList sortedUpdatedTracks = co_await sortTracks(librarySortScript(), std::move(storedUpdatedTracks));
+    if(!lifetime) {
+        co_return;
+    }
+
+    TrackLookup lookup{m_tracks};
+    TrackList tracks{m_tracks};
+
+    for(const Track& track : sortedUpdatedTracks) {
+        if(const auto index = lookup.findById(track)) {
+            tracks.at(*index) = track;
+            tracks.at(*index).clearWasModified();
+        }
+    }
+
+    TrackList newTracks;
+    newTracks.reserve(sortedAddedTracks.size());
+
+    for(const Track& track : sortedAddedTracks) {
+        if(const auto index = lookup.findForAdd(track)) {
+            tracks.at(*index) = track;
+            tracks.at(*index).clearWasModified();
+            sortedUpdatedTracks.push_back(track);
+        }
+        else {
+            newTracks.push_back(track);
+            lookup.add(track, tracks.size(), TrackLookup::Type::All);
+            tracks.push_back(track);
+        }
+    }
+
+    TrackList sortedTracks = co_await sortTracks(librarySortScript(), std::move(tracks));
+    if(!lifetime) {
+        co_return;
+    }
+
+    if(!isRegisteredExternalLibrary(library)) {
+        qCWarning(LIBRARY) << "Discarded snapshot for removed external library" << library.id;
+        Q_EMIT m_self->externalLibrarySnapshotFinished(operation, library.id, false);
+
+        co_return;
+    }
+
+    setTracks(std::move(sortedTracks));
+    applyPendingExternalStats(sortedUpdatedTracks);
+
+    if(!sortedUpdatedTracks.empty()) {
+        Q_EMIT m_self->tracksMetadataChanged(sortedUpdatedTracks);
+        if(sourceStats != Track::Stat::None) {
+            Q_EMIT m_self->tracksStatsChanged(sortedUpdatedTracks, sourceStats);
+        }
+    }
+    if(!newTracks.empty()) {
+        Q_EMIT m_self->tracksAdded(newTracks);
+    }
+
+    Q_EMIT m_self->externalLibrarySnapshotFinished(operation, library.id, true);
+}
+
+std::optional<TrackList> UnifiedMusicLibraryPrivate::publishExternalTrackStats(const LibraryInfo& library,
+                                                                               const TrackList& reportedTracks,
+                                                                               const Track::Stats sourceStats)
+{
+    if(!isRegisteredExternalLibrary(library) || sourceStats == Track::Stat::None || reportedTracks.empty()) {
+        return {};
+    }
+
+    TrackList publishedTracks;
+    publishedTracks.reserve(reportedTracks.size());
+
+    for(const Track& reportedTrack : reportedTracks) {
+        const auto index = m_trackIndices.find(reportedTrack.id());
+        if(index == m_trackIndices.cend() || m_tracks.at(index->second).libraryId() != library.id
+           || m_tracks.at(index->second).externalLibraryPath() != library.path) {
+            return {};
+        }
+
+        Track publishedTrack{m_tracks.at(index->second)};
+        publishedTrack.replaceStats(reportedTrack, sourceStats);
+        publishedTracks.push_back(publishedTrack);
+    }
+
+    const uint64_t generation = ++m_externalStatsGeneration;
+    for(const Track& publishedTrack : publishedTracks) {
+        auto& pending = m_pendingExternalStats[publishedTrack.id()];
+        pending.published.replaceStats(publishedTrack, sourceStats);
+        if(sourceStats.testFlag(Track::Stat::Loved)) {
+            pending.lovedGeneration = generation;
+        }
+        if(sourceStats.testFlag(Track::Stat::Rating)) {
+            pending.ratingGeneration = generation;
+        }
+        if(sourceStats.testFlag(Track::Stat::Playcount)) {
+            pending.playcountGeneration = generation;
+        }
+    }
+
+    publishTrackStats(publishedTracks, sourceStats);
+
+    return publishedTracks;
+}
+
+void UnifiedMusicLibraryPrivate::publishTrackStats(const TrackList& tracks, const Track::Stats stats)
+{
+    TrackList updatedTracks;
+    TrackList ratingsChanged;
+    TrackList playcountsChanged;
+    TrackList lovedChanged;
+
+    for(const Track& track : tracks) {
+        const auto index = m_trackIndices.find(track.id());
+        if(index == m_trackIndices.cend()) {
+            continue;
+        }
+
+        Track& libraryTrack = m_tracks.at(index->second);
+        Track updatedTrack{libraryTrack};
+        updatedTrack.replaceStats(track, stats);
+
+        const bool changesRating
+            = stats.testFlag(Track::Stat::Rating) && statChanged(libraryTrack, updatedTrack, Track::Stat::Rating);
+        const bool changesPlaycount
+            = stats.testFlag(Track::Stat::Playcount) && statChanged(libraryTrack, updatedTrack, Track::Stat::Playcount);
+        const bool changesLoved
+            = stats.testFlag(Track::Stat::Loved) && statChanged(libraryTrack, updatedTrack, Track::Stat::Loved);
+        if(!changesRating && !changesPlaycount && !changesLoved) {
+            continue;
+        }
+
+        libraryTrack = updatedTrack;
+        updatedTracks.push_back(updatedTrack);
+        if(changesRating) {
+            ratingsChanged.push_back(updatedTrack);
+        }
+        if(changesPlaycount) {
+            playcountsChanged.push_back(updatedTrack);
+        }
+        if(changesLoved) {
+            lovedChanged.push_back(updatedTrack);
+        }
+    }
+
+    if(updatedTracks.empty()) {
+        return;
+    }
+
+    Q_EMIT m_self->tracksUpdated(updatedTracks);
+    if(!ratingsChanged.empty()) {
+        Q_EMIT m_self->tracksStatsChanged(ratingsChanged, Track::Stat::Rating);
+    }
+    if(!playcountsChanged.empty()) {
+        Q_EMIT m_self->tracksStatsChanged(playcountsChanged, Track::Stat::Playcount);
+    }
+    if(!lovedChanged.empty()) {
+        Q_EMIT m_self->tracksStatsChanged(lovedChanged, Track::Stat::Loved);
+    }
+}
+
+void UnifiedMusicLibraryPrivate::applyPendingExternalStats(TrackList& tracks) const
+{
+    if(m_pendingExternalStats.empty()) {
+        return;
+    }
+
+    for(Track& track : tracks) {
+        if(const auto pending = m_pendingExternalStats.find(track.id()); pending != m_pendingExternalStats.cend()) {
+            track.replaceStats(pending->second.published, pendingStats(pending->second));
+        }
+    }
+}
+
+QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalTrackStats(LibraryInfo library, TrackList publishedTracks,
+                                                                        Track::Stats sourceStats, QUuid operation,
+                                                                        uint64_t generation)
+{
+    const QPointer lifetime{m_self};
+
+    const auto storeFuture = m_threadHandler.storeExternalTrackStats(library, publishedTracks, sourceStats);
+    co_await qCoro(QFuture<void>{storeFuture}).waitForFinished();
+
+    if(!lifetime) {
+        co_return;
+    }
+
+    const bool stored
+        = storeFuture.resultCount() > 0 && storeFuture.result().has_value() && isRegisteredExternalLibrary(library);
+
+    for(const Track& publishedTrack : publishedTracks) {
+        const auto pending = m_pendingExternalStats.find(publishedTrack.id());
+        if(pending == m_pendingExternalStats.end()) {
+            continue;
+        }
+
+        if(pending->second.lovedGeneration == generation) {
+            pending->second.lovedGeneration = 0;
+        }
+        if(pending->second.ratingGeneration == generation) {
+            pending->second.ratingGeneration = 0;
+        }
+        if(pending->second.playcountGeneration == generation) {
+            pending->second.playcountGeneration = 0;
+        }
+        if(pendingStats(pending->second) == Track::Stat::None) {
+            m_pendingExternalStats.erase(pending);
+        }
+    }
+
+    if(!stored) {
+        qCWarning(LIBRARY) << "Failed to store statistics for external library" << library.id;
+    }
+
+    co_await resortLibraryTracks(m_tracks);
+
+    if(!lifetime) {
+        co_return;
+    }
+
+    Q_EMIT m_self->externalTrackStatsFinished(operation, library.id, stored);
+}
+
+Track::Stats UnifiedMusicLibraryPrivate::handledStats(const Track& canonical) const
+{
+    const auto handler = m_externalStatsHandlers.find(canonical.libraryId());
+    if(handler == m_externalStatsHandlers.cend() || handler->second.handler.isNull()) {
+        return Track::Stat::None;
+    }
+
+    const auto library = m_libraryManager->libraryInfo(canonical.libraryId());
+    if(!library || library->path != canonical.externalLibraryPath() || !isRegisteredExternalLibrary(*library)
+       || !m_self->isTrackSourceActive(canonical)) {
+        return Track::Stat::None;
+    }
+
+    return handler->second.stats & canonical.readOnlyStats();
 }
 
 void UnifiedMusicLibraryPrivate::removeLibrary(const LibraryInfo& library, const std::set<int>& tracksRemoved)
@@ -946,11 +1395,27 @@ UnifiedMusicLibrary::UnifiedMusicLibrary(LibraryManager* libraryManager, DbConne
     , p{std::make_unique<UnifiedMusicLibraryPrivate>(this, libraryManager, std::move(dbPool), std::move(playlistLoader),
                                                      std::move(audioLoader), std::move(remoteIo), settings)}
 {
-    QObject::connect(p->m_libraryManager, &LibraryManager::libraryAdded, this, &MusicLibrary::rescan);
+    QObject::connect(p->m_libraryManager, &LibraryManager::libraryAdded, this, [this](const LibraryInfo& library) {
+        if(!isExternalLibrary(library)) {
+            rescan(library);
+        }
+    });
     QObject::connect(p->m_libraryManager, &LibraryManager::libraryAboutToBeRemoved, this,
                      [this](const LibraryInfo& library) { p->m_threadHandler.libraryRemoved(library.id); });
     QObject::connect(p->m_libraryManager, &LibraryManager::libraryRemoved, this,
                      [this](const LibraryInfo& library, const std::set<int>& tracksRemoved) {
+                         if(isExternalLibrary(library)) {
+                             if(p->m_externalStatsHandlers.erase(library.id) > 0) {
+                                 Q_EMIT externalLibraryStatsHandlerChanged();
+                             }
+                             const QString inactiveKey = u"ExternalLibraries/Inactive/"_s + library.path;
+                             const bool wasInactive    = p->m_settings->fileValue(inactiveKey).toBool();
+                             p->m_settings->fileRemove(u"ExternalLibraries/ReadOnlyStats/"_s + library.path);
+                             p->m_settings->fileRemove(inactiveKey);
+                             if(wasInactive) {
+                                 Q_EMIT sourceActivationChanged();
+                             }
+                         }
                          p->removeLibrary(library, tracksRemoved);
                      });
 
@@ -1044,12 +1509,137 @@ void UnifiedMusicLibrary::rescanAll()
 
 ScanRequest UnifiedMusicLibrary::refresh(const LibraryInfo& library)
 {
+    if(isExternalLibrary(library)) {
+        Q_EMIT externalLibraryRefreshRequested(library);
+        return {.type = ScanRequest::Library, .id = -1, .cancel = {}};
+    }
     return p->m_threadHandler.refreshLibrary(library);
 }
 
 ScanRequest UnifiedMusicLibrary::rescan(const LibraryInfo& library)
 {
+    if(isExternalLibrary(library)) {
+        Q_EMIT externalLibraryRefreshRequested(library);
+        return {.type = ScanRequest::Library, .id = -1, .cancel = {}};
+    }
     return p->m_threadHandler.scanLibrary(library);
+}
+
+std::optional<LibraryInfo> UnifiedMusicLibrary::addExternalLibrary(const QString& path, const QString& name)
+{
+    if(!Track::isVirtualPath(path) || path.endsWith(u'/')) {
+        return {};
+    }
+
+    if(auto library = p->m_libraryManager->findLibraryByPath(path)) {
+        return library;
+    }
+
+    for(const LibraryInfo& library : p->m_libraryManager->allLibraries() | std::views::values) {
+        if(isExternalLibrary(library)
+           && (library.path.startsWith(path + u'/') || path.startsWith(library.path + u'/'))) {
+            qCWarning(LIBRARY) << "Rejected external library path that overlaps library" << library.id;
+            return {};
+        }
+    }
+
+    const int id = p->m_libraryManager->addLibrary(path, name);
+    if(id < 0) {
+        return {};
+    }
+
+    return p->m_libraryManager->libraryInfo(id);
+}
+
+void UnifiedMusicLibrary::setExternalLibraryReadOnlyStats(const LibraryInfo& library, Track::Stats stats)
+{
+    if(p->isRegisteredExternalLibrary(library)) {
+        p->m_settings->fileSet(u"ExternalLibraries/ReadOnlyStats/"_s + library.path, stats.toInt());
+    }
+}
+
+void UnifiedMusicLibrary::setExternalLibraryActive(const LibraryInfo& library, bool active)
+{
+    if(!p->isRegisteredExternalLibrary(library)) {
+        return;
+    }
+    p->m_settings->fileSet(u"ExternalLibraries/Inactive/"_s + library.path, !active);
+    Q_EMIT sourceActivationChanged();
+}
+
+void UnifiedMusicLibrary::setExternalLibraryStatsHandler(const LibraryInfo& library, Track::Stats stats,
+                                                         QObject* handler)
+{
+    if(!p->isRegisteredExternalLibrary(library)) {
+        return;
+    }
+
+    if(stats == Track::Stat::None || !handler) {
+        if(p->m_externalStatsHandlers.erase(library.id) > 0) {
+            Q_EMIT externalLibraryStatsHandlerChanged();
+        }
+        return;
+    }
+
+    p->m_externalStatsHandlers.insert_or_assign(library.id, ExternalStatsHandler{.stats = stats, .handler = handler});
+    QObject::connect(handler, &QObject::destroyed, this, [this, libraryId = library.id]() {
+        const auto current = p->m_externalStatsHandlers.find(libraryId);
+        if(current != p->m_externalStatsHandlers.end() && current->second.handler.isNull()) {
+            p->m_externalStatsHandlers.erase(current);
+            Q_EMIT externalLibraryStatsHandlerChanged();
+        }
+    });
+    Q_EMIT externalLibraryStatsHandlerChanged();
+}
+
+bool UnifiedMusicLibrary::canEditTrackStats(const Track& track, Track::Stats stats) const
+{
+    const Track canonical = trackForId(track.id());
+    if(!canonical.isValid()) {
+        return canUpdateTrackStats(track, stats);
+    }
+
+    const Track::Stats sourceStats = stats & canonical.readOnlyStats();
+    return (sourceStats & ~p->handledStats(canonical)) == Track::Stat::None;
+}
+
+void UnifiedMusicLibrary::applyExternalTrackStats(const LibraryInfo& library, const TrackList& tracks,
+                                                  Track::Stats stats, const QUuid& operation)
+{
+    const Track::Stats sourceStats
+        = stats
+        & Track::Stats::fromInt(p->m_settings->fileValue(u"ExternalLibraries/ReadOnlyStats/"_s + library.path).toInt());
+    auto publishedTracks
+        = operation.isNull() ? std::nullopt : p->publishExternalTrackStats(library, tracks, sourceStats);
+
+    if(!publishedTracks) {
+        qCWarning(LIBRARY) << "Rejected statistics for external library" << library.id;
+        p->enqueueCommit([this, libraryId = library.id, operation]() -> QCoro::Task<> {
+            Q_EMIT externalTrackStatsFinished(operation, libraryId, false);
+            co_return;
+        });
+        return;
+    }
+
+    p->enqueueCommit([this, library, publishedTracks = std::move(*publishedTracks), sourceStats, operation,
+                      generation = p->m_externalStatsGeneration]() mutable {
+        return p->commitApplyExternalTrackStats(std::move(library), std::move(publishedTracks), sourceStats, operation,
+                                                generation);
+    });
+}
+
+bool UnifiedMusicLibrary::isTrackSourceActive(const Track& track) const
+{
+    return track.externalLibraryPath().isEmpty()
+        || !p->m_settings->fileValue(u"ExternalLibraries/Inactive/"_s + track.externalLibraryPath()).toBool();
+}
+
+void UnifiedMusicLibrary::applyExternalLibrarySnapshot(const LibraryInfo& library, const TrackList& tracks,
+                                                       const QUuid& operation)
+{
+    p->enqueueCommit([this, library, tracks, operation]() mutable {
+        return p->commitApplyExternalLibrarySnapshot(std::move(library), std::move(tracks), operation);
+    });
 }
 
 void UnifiedMusicLibrary::cancelScan(int id)
@@ -1130,7 +1720,13 @@ void UnifiedMusicLibrary::updateTrack(const Track& track)
 
 void UnifiedMusicLibrary::updateTracks(const TrackList& tracks)
 {
-    p->updateTracks(tracks);
+    TrackList editableTracks;
+    for(const Track& track : tracks) {
+        if(trackForId(track.id()).externalLibraryPath().isEmpty()) {
+            editableTracks.push_back(track);
+        }
+    }
+    p->updateTracks(editableTracks);
 }
 
 void UnifiedMusicLibrary::updateTrackMetadata(const TrackList& tracks)
@@ -1155,7 +1751,39 @@ PendingTrackCoverProvider* UnifiedMusicLibrary::pendingTrackCoverProvider() cons
 
 void UnifiedMusicLibrary::updateTrackStats(const TrackList& tracks, Track::Stats stats)
 {
-    p->m_threadHandler.saveUpdatedTrackStats(tracks, stats);
+    for(const Track& track : tracks) {
+        const Track canonical           = trackForId(track.id());
+        const Track::Stats allowedStats = stats & ~canonical.readOnlyStats();
+        if(allowedStats != Track::Stat::None) {
+            Track updatedTrack{track};
+            updatedTrack.setExternalLibraryPath(canonical.externalLibraryPath());
+            updatedTrack.setReadOnlyStats(canonical.readOnlyStats());
+            updatedTrack.generateHash();
+            p->m_threadHandler.saveUpdatedTrackStats({updatedTrack}, allowedStats);
+        }
+    }
+}
+
+void UnifiedMusicLibrary::editTrackStats(const TrackList& tracks, Track::Stats stats)
+{
+    updateTrackStats(tracks, stats);
+
+    std::map<int, TrackList> requestedTracks;
+
+    for(const Track& track : tracks) {
+        const Track canonical             = trackForId(track.id());
+        const Track::Stats requestedStats = stats & p->handledStats(canonical);
+        if(requestedStats != Track::Stat::None) {
+            Track requestedTrack{canonical};
+            requestedTrack.replaceStats(track, requestedStats);
+            requestedTracks[canonical.libraryId()].push_back(requestedTrack);
+        }
+    }
+
+    for(const auto& [libraryId, libraryTracks] : requestedTracks) {
+        Q_EMIT externalTrackStatsChangeRequested(*p->m_libraryManager->libraryInfo(libraryId), libraryTracks,
+                                                 stats & p->handledStats(libraryTracks.front()));
+    }
 }
 
 void UnifiedMusicLibrary::updateTrackStats(const Track& track, Track::Stats stats)

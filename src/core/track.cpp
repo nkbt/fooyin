@@ -50,6 +50,8 @@ constexpr auto FullDateRegex                    = R"lit(\b(\d{4})-(\d{2})-(\d{2}
 constexpr auto ChapterProperty                  = "_CHAPTER"_L1;
 constexpr auto ChapterValue                     = "1"_L1;
 constexpr auto PreservedExtraPropertiesProperty = "_FY_PRESERVED_EXTRA_PROPERTIES"_L1;
+constexpr auto ExternalLibraryPathProperty      = "_FY_EXTERNAL_LIBRARY_PATH"_L1;
+constexpr auto ReadOnlyStatsProperty            = "_FY_READ_ONLY_STATS"_L1;
 
 namespace Fooyin {
 namespace {
@@ -811,6 +813,11 @@ bool Track::sameDataAs(const Track& other) const
 
 QString Track::generateHash()
 {
+    if(const QString* externalLibraryPath = p->extraProps.find(ExternalLibraryPathProperty)) {
+        p->hash = Utils::generateHash(QString{ExternalLibraryPathProperty}, *externalLibraryPath, uniqueFilepath());
+        return p->hash;
+    }
+
     QString title = p->title;
     if(title.isEmpty()) {
         title = p->directory() + p->filename();
@@ -1601,6 +1608,16 @@ QMap<QString, QString> Track::metadata() const
     addField(DateKey, p->date);
 
     return map;
+}
+
+QString Track::externalLibraryPath() const
+{
+    return p->extraProps.value(ExternalLibraryPathProperty);
+}
+
+Track::Stats Track::readOnlyStats() const
+{
+    return Stats::fromInt(p->extraProps.value(ReadOnlyStatsProperty).toInt());
 }
 
 bool Track::hasExtraProperty(const QString& prop) const
@@ -2430,6 +2447,17 @@ void Track::removeExtraProperty(const QString& prop)
     }
 }
 
+void Track::setExternalLibraryPath(const QString& path)
+{
+    setExtraProperty(ExternalLibraryPathProperty, path, ExtraPropertyReloadPolicy::Preserve);
+}
+
+void Track::setReadOnlyStats(Stats stats)
+{
+    setExtraProperty(ReadOnlyStatsProperty, stats == Stat::None ? QString{} : QString::number(stats.toInt()),
+                     ExtraPropertyReloadPolicy::Preserve);
+}
+
 void Track::normaliseExtraProperties()
 {
     normaliseExtraTrackProperties(p->extraProps);
@@ -2567,6 +2595,21 @@ void Track::setLastPlayed(uint64_t time)
 {
     if(time > p->lastPlayed) {
         p->lastPlayed = time;
+    }
+}
+
+void Track::replaceStats(const Track& track, Stats stats)
+{
+    if(stats.testFlag(Stat::Loved)) {
+        setLoved(track.isLoved());
+    }
+    if(stats.testFlag(Stat::Rating)) {
+        setRating(track.rating());
+    }
+    if(stats.testFlag(Stat::Playcount)) {
+        setPlayCount(track.playCount());
+        p->firstPlayed = track.firstPlayed();
+        p->lastPlayed  = track.lastPlayed();
     }
 }
 

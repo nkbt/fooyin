@@ -77,6 +77,7 @@ public:
 
     void updateTrackStats(const TrackList& tracks, Track::Stats stats) override;
     void updateTrackStats(const Track& track, Track::Stats stats) override;
+    void editTrackStats(const TrackList& tracks, Track::Stats stats) override;
 
     void trackWasPlayed(const Track& track);
     void setActivePlaybackTrack(const Track& track);
@@ -84,6 +85,16 @@ public:
     void cleanupTracks();
     WriteRequest removeUnavailbleTracks() override;
     WriteRequest deleteTracks(const TrackList& tracks) override;
+    std::optional<LibraryInfo> addExternalLibrary(const QString& path, const QString& name) override;
+    void applyExternalLibrarySnapshot(const LibraryInfo& library, const TrackList& tracks,
+                                      const QUuid& operation) override;
+    bool isTrackSourceActive(const Track& track) const override;
+    void setExternalLibraryActive(const LibraryInfo& library, bool active) override;
+    void setExternalLibraryReadOnlyStats(const LibraryInfo& library, Track::Stats stats) override;
+    void setExternalLibraryStatsHandler(const LibraryInfo& library, Track::Stats stats, QObject* handler) override;
+    [[nodiscard]] bool canEditTrackStats(const Track& track, Track::Stats stats) const override;
+    void applyExternalTrackStats(const LibraryInfo& library, const TrackList& tracks, Track::Stats stats,
+                                 const QUuid& operation) override;
 
 private:
     std::unique_ptr<UnifiedMusicLibraryPrivate> p;

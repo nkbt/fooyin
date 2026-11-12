@@ -82,6 +82,17 @@ public:
     WriteRequest deleteTracks(const TrackList& tracks);
     void cleanupTracks();
     void libraryRemoved(int id);
+    /*!
+     * Stores an external library snapshot on the database thread. Resolves to the stored added and updated tracks, or
+     * nothing on failure.
+     */
+    QFuture<std::optional<std::pair<TrackList, TrackList>>>
+    storeExternalLibrarySnapshot(const LibraryInfo& library, const TrackList& addedTracks,
+                                 const TrackList& updatedTracks, const TrackList& unchangedTracks,
+                                 Track::Stats sourceStats);
+    /** Stores source-owned statistics on the database thread. Resolves to the stored tracks, or nothing on failure. */
+    QFuture<std::optional<TrackList>> storeExternalTrackStats(const LibraryInfo& library, const TrackList& tracks,
+                                                              Track::Stats sourceStats);
 
 Q_SIGNALS:
     void progressChanged(const Fooyin::ScanProgress& progress);

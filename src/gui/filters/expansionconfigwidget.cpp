@@ -53,7 +53,7 @@ ExpansionConfigWidget::ExpansionConfigWidget(FilterWidget* filterWidget, QWidget
     , m_footerScript{new ScriptTextEdit(this)}
     , m_groupByScript{new ScriptTextEdit(this)}
     , m_subheaderScript{new ScriptTextEdit(this)}
-    , m_preview{new FilterExpansionWidget(nullptr, nullptr, this)}
+    , m_preview{new FilterExpansionWidget(nullptr, nullptr, nullptr, this)}
     , m_previewTracks{std::make_shared<const TrackList>(TrackGenerator::generateTracks({.albumCount = 1}))}
     , m_previewSubscription{nullptr}
     , m_previewGeneration{0}

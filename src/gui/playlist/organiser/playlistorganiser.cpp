@@ -514,8 +514,14 @@ void PlaylistOrganiser::contextMenuEvent(QContextMenuEvent* event)
         m_removePlaylist->setStatusTip(tr("Remove the selected playlists and groups"));
     }
 
-    m_removePlaylist->setEnabled(index.isValid());
-    m_renamePlaylist->setEnabled(actionRows.size() == 1 && index.isValid());
+    const bool readOnly = std::ranges::any_of(actionRows, [](const QModelIndex& actionIndex) {
+        const auto* playlist = actionIndex.data(PlaylistOrganiserItem::PlaylistData).value<Playlist*>();
+        return playlist && !playlist->sourceLibraryPath().isEmpty();
+    });
+    m_removePlaylist->setEnabled(index.isValid() && !readOnly);
+    m_renamePlaylist->setEnabled(actionRows.size() == 1 && index.isValid() && !readOnly);
+    m_removePlaylist->setToolTip(readOnly ? tr("Playlist is managed by the library source") : m_removePlaylist->text());
+    m_renamePlaylist->setToolTip(readOnly ? tr("Playlist is managed by the library source") : m_renamePlaylist->text());
 
     menu->addAction(m_newPlaylistCmd->action());
     menu->addAction(m_newAutoPlaylistCmd->action());
@@ -594,6 +600,10 @@ void PlaylistOrganiser::contextMenuEvent(QContextMenuEvent* event)
             if(!playlist->isAutoPlaylist()) {
                 auto* lockAction
                     = new QAction(Gui::iconFromTheme(Constants::Icons::ReadOnly), tr("Lock playlist"), menu);
+                lockAction->setEnabled(playlist->sourceLibraryPath().isEmpty());
+                lockAction->setToolTip(playlist->sourceLibraryPath().isEmpty()
+                                           ? tr("Lock playlist")
+                                           : tr("Playlist is managed by the library source"));
                 lockAction->setCheckable(true);
                 lockAction->setChecked(playlist->isLocked());
                 QObject::connect(lockAction, &QAction::toggled, this, [this, id = playlist->id()](bool locked) {

@@ -39,7 +39,7 @@ public:
                      QWidget* parent = nullptr);
     ~ReplayGainWidget() override;
 
-    void apply() override;
+    bool apply() override;
     void updateTracks(const TrackList& tracks) override;
     void setTrackScope(const TrackList& tracks) override;
     [[nodiscard]] bool hasPendingScopeChanges() const override;

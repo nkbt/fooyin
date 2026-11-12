@@ -383,14 +383,20 @@ void PlaylistManagerWidget::updateActionState() const
             m_renameAction->setShortcut(m_renameCmd->shortcut());
         }
         m_renameAction->setText(isAuto ? tr("Re&name autoplaylist") : tr("Re&name playlist"));
-        m_renameAction->setEnabled(hasPlaylist);
+        m_renameAction->setEnabled(hasPlaylist && playlist->sourceLibraryPath().isEmpty());
+        m_renameAction->setToolTip(hasPlaylist && !playlist->sourceLibraryPath().isEmpty()
+                                       ? tr("Playlist is managed by the library source")
+                                       : tr("Rename playlist"));
     }
     if(m_removeAction) {
         if(m_removeCmd) {
             m_removeAction->setShortcut(m_removeCmd->shortcut());
         }
         m_removeAction->setText(isAuto ? tr("&Remove autoplaylist") : tr("&Remove playlist"));
-        m_removeAction->setEnabled(hasPlaylist);
+        m_removeAction->setEnabled(hasPlaylist && playlist->sourceLibraryPath().isEmpty());
+        m_removeAction->setToolTip(hasPlaylist && !playlist->sourceLibraryPath().isEmpty()
+                                       ? tr("Playlist is managed by the library source")
+                                       : tr("Remove playlist"));
     }
     if(m_savePlaylistAction) {
         m_savePlaylistAction->setEnabled(hasPlaylist && playlist->trackCount() > 0);
@@ -497,6 +503,10 @@ void PlaylistManagerWidget::showPlaylistContextMenu(const QPoint& pos)
 
         if(!playlist->isAutoPlaylist()) {
             auto* lockAction = new QAction(Gui::iconFromTheme(Constants::Icons::ReadOnly), tr("Lock playlist"), menu);
+            lockAction->setEnabled(playlist->sourceLibraryPath().isEmpty());
+            lockAction->setToolTip(playlist->sourceLibraryPath().isEmpty()
+                                       ? tr("Lock playlist")
+                                       : tr("Playlist is managed by the library source"));
             lockAction->setCheckable(true);
             lockAction->setChecked(playlist->isLocked());
             QObject::connect(lockAction, &QAction::toggled, this, [this, id = playlist->id()](bool locked) {

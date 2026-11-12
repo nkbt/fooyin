@@ -32,6 +32,7 @@
 #include <stop_token>
 
 #include <QByteArray>
+#include <QNetworkRequest>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -68,7 +69,7 @@ public:
     //! Cancel pending preparation. Has no effect after completion.
     void cancel();
     [[nodiscard]] bool isFinished() const;
-    //! True when preparation succeeded, including after the source has been taken.
+    //! True when preparation succeeded and source access remains valid, including after the source has been taken.
     [[nodiscard]] bool isReady() const;
     [[nodiscard]] QString errorString() const;
 
@@ -128,12 +129,18 @@ public:
 
     //! Begin asynchronous preparation using the configured remote open timeout.
     [[nodiscard]] std::shared_ptr<PendingRemoteStream> prepareStream(const QUrl& url) const;
+    //! Prepare an authenticated stream tied to the lifetime of its source. Redirects must stay within @p redirectScope.
+    //! The request always uses the network and its responses are not cached.
+    [[nodiscard]] std::shared_ptr<PendingRemoteStream>
+    prepareStream(const QNetworkRequest& request, const QUrl& redirectScope, std::stop_token sourceLifetime) const;
 
     [[nodiscard]] std::shared_ptr<RemoteDownloadHandle>
     download(const QUrl& url, QObject* context, DownloadCallback callback,
              std::chrono::milliseconds timeout = std::chrono::seconds{30});
 
 private:
+    [[nodiscard]] std::shared_ptr<PendingRemoteStream> prepareSource(RemoteStreamSource source,
+                                                                     std::stop_token sourceLifetime) const;
     std::shared_ptr<QNetworkAccessManager> m_networkManager;
     SettingsManager* m_settings;
 };

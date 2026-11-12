@@ -24,6 +24,7 @@
 
 #include <utils/database/dbconnectionhandler.h>
 #include <utils/database/dbconnectionprovider.h>
+#include <utils/database/dbtransaction.h>
 #include <utils/fileutils.h>
 #include <utils/helpers.h>
 
@@ -147,17 +148,22 @@ bool LibraryManager::removeLibrary(int id)
     const auto library = p->m_libraries.at(id);
     Q_EMIT libraryAboutToBeRemoved(library);
 
-    if(p->m_libraryConnector.removeLibrary(id)) {
-        eraseLibrary(p->m_libraries, id);
-
-        const auto tracksRemoved = p->m_trackConnector.deleteLibraryTracks(id);
-        Q_EMIT libraryRemoved(library, tracksRemoved);
-        Q_EMIT librariesChanged();
-
-        return true;
+    DbTransaction transaction{p->m_libraryConnector.db()};
+    if(!transaction || !p->m_libraryConnector.removeLibrary(id)) {
+        return false;
     }
 
-    return false;
+    const auto tracksRemoved = p->m_trackConnector.deleteLibraryTracks(library);
+    if(!tracksRemoved || !transaction.commit()) {
+        return false;
+    }
+
+    eraseLibrary(p->m_libraries, id);
+
+    Q_EMIT libraryRemoved(library, *tracksRemoved);
+    Q_EMIT librariesChanged();
+
+    return true;
 }
 
 bool LibraryManager::renameLibrary(int id, const QString& name)

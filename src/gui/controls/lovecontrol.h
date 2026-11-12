@@ -24,6 +24,7 @@
 
 namespace Fooyin {
 class LoveControlEditor;
+class MusicLibrary;
 class PlayerController;
 class SettingsManager;
 
@@ -32,7 +33,8 @@ class LoveControl : public FyWidget
     Q_OBJECT
 
 public:
-    LoveControl(PlayerController* playerController, SettingsManager* settings, QWidget* parent = nullptr);
+    LoveControl(PlayerController* playerController, MusicLibrary* library, SettingsManager* settings,
+                QWidget* parent = nullptr);
 
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString layoutName() const override;
@@ -46,6 +48,7 @@ private:
     void changeLoved(bool loved);
 
     PlayerController* m_playerController;
+    MusicLibrary* m_library;
     SettingsManager* m_settings;
     LoveControlEditor* m_editor;
 };

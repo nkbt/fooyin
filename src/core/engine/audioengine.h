@@ -215,6 +215,9 @@ Q_SIGNALS:
     void trackChangeRejected(const Fooyin::Engine::PlaybackItem& item);
     void nextTrackReadiness(const Fooyin::Engine::PlaybackItem& item, bool ready, uint64_t requestId);
 
+    void playbackOccurrenceStarted(const Fooyin::Engine::PlaybackOccurrenceContext& context);
+    void playbackOccurrenceUpdated(const Fooyin::Engine::PlaybackOccurrenceContext& context);
+    void playbackOccurrenceEnded(const Fooyin::Engine::PlaybackOccurrenceContext& context);
     void finished();
 
     void deviceError(const QString& error);
@@ -228,6 +231,9 @@ private:
     friend class Testing::AudioEngineTestAccessor;
 
     void beginShutdown();
+    void confirmSourceOutput(StreamId streamId, uint64_t sourcePositionMs);
+    void commitPlaybackOccurrence();
+    void endPlaybackOccurrence(bool failed);
 
     bool ensureCrossfadePrepared(const Engine::PlaybackItem& item, bool isManualChange);
     bool handleManualChangeFade(const Engine::PlaybackItem& item);
@@ -398,6 +404,10 @@ private:
     std::atomic<Engine::TrackStatus> m_trackStatus;
     Playback::Phase m_phase;
 
+    std::optional<Engine::PlaybackOccurrenceContext> m_playbackOccurrence;
+    uint64_t m_nextPlaybackOccurrenceId{0};
+    uint64_t m_committedPlaybackGeneration{0};
+    bool m_preservePlaybackOccurrence{false};
     Track m_currentTrack;
     uint64_t m_currentTrackItemId{0};
     Track m_lastEndedTrack;

@@ -29,13 +29,18 @@
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QNetworkAccessManager>
+#include <QNetworkDiskCache>
 #include <QStandardPaths>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QThread>
 
 #include <chrono>
 #include <functional>
 #include <future>
+#include <memory>
 #include <optional>
 #include <stop_token>
 
@@ -412,5 +417,181 @@ TEST_F(RemoteIoServiceTest, PreparesHttpCapabilitiesBeforeExposingDevice)
     finishOperation(operation);
     EXPECT_EQ(network->lastRequest.rawHeader("Range"), "bytes=8-");
     EXPECT_EQ(network->requestCount, 2);
+}
+TEST_F(RemoteIoServiceTest, PreservesAuthenticatedStreamRequestHeaders)
+{
+    auto network = makeFakeNetworkAccessManager(true);
+    RemoteIoService service{network, &m_settings};
+    std::stop_source sourceLifetime;
+    QNetworkRequest request{QUrl{u"https://example.com/audio"_s}};
+    request.setRawHeader("Authorization", "Bearer synthetic-session");
+
+    auto pending = service.prepareStream(request, QUrl{u"https://example.com"_s}, sourceLifetime.get_token());
+    QCoreApplication::processEvents();
+    ASSERT_FALSE(network->lastReply.isNull());
+    EXPECT_EQ(network->lastRequest.rawHeader("Authorization"), "Bearer synthetic-session");
+    EXPECT_EQ(network->lastRequest.attribute(QNetworkRequest::RedirectPolicyAttribute).toInt(),
+              QNetworkRequest::UserVerifiedRedirectPolicy);
+
+    network->lastReply->setResponseHeader("Content-Length", "4");
+    network->lastReply->emitMetadataChanged();
+    ASSERT_TRUE(waitFor([&]() { return pending->isReady(); }));
+    EXPECT_TRUE(pending->takeSource().device);
+}
+
+TEST_F(RemoteIoServiceTest, RejectsCrossOriginAuthenticatedStreamRedirects)
+{
+    auto network = makeFakeNetworkAccessManager(true);
+    RemoteIoService service{network, &m_settings};
+    std::stop_source sourceLifetime;
+    QNetworkRequest request{QUrl{u"https://example.com/audio"_s}};
+    request.setRawHeader("Authorization", "Bearer synthetic-session");
+
+    auto pending = service.prepareStream(request, QUrl{u"https://example.com"_s}, sourceLifetime.get_token());
+    QCoreApplication::processEvents();
+    const auto reply = network->lastReply;
+    ASSERT_FALSE(reply.isNull());
+    Q_EMIT reply->redirected(QUrl{u"https://other.example/audio"_s});
+
+    ASSERT_TRUE(waitFor([&]() { return pending->isFinished(); }));
+    EXPECT_FALSE(pending->isReady());
+    EXPECT_TRUE(reply.isNull() || reply->wasAborted());
+    EXPECT_EQ(network->requestCount, 1);
+    EXPECT_FALSE(pending->takeSource().device);
+}
+
+TEST_F(RemoteIoServiceTest, RevokesPreparedSourceWithoutAnotherCompletion)
+{
+    auto network = makeFakeNetworkAccessManager(true);
+    RemoteIoService service{network, &m_settings};
+    std::stop_source sourceLifetime;
+    QNetworkRequest request{QUrl{u"https://example.com/audio"_s}};
+    auto pending = service.prepareStream(request, QUrl{u"https://example.com"_s}, sourceLifetime.get_token());
+    int completions{0};
+    QObject::connect(pending.get(), &PendingRemoteStream::finished, qApp, [&]() { ++completions; });
+    QCoreApplication::processEvents();
+    ASSERT_FALSE(network->lastReply.isNull());
+    network->lastReply->finish("audio");
+    ASSERT_TRUE(waitFor([&]() { return completions == 1; }));
+    auto source = pending->takeSource();
+    ASSERT_NE(source.device, nullptr);
+
+    sourceLifetime.request_stop();
+
+    EXPECT_FALSE(pending->isReady());
+    EXPECT_FALSE(pending->takeSource().device);
+    EXPECT_EQ(source.device->read(1).size(), 0);
+    QCoreApplication::processEvents();
+    EXPECT_EQ(completions, 1);
+}
+
+TEST_F(RemoteIoServiceTest, RevokingSourceWakesPreparationWaiterWithoutNetworkEvents)
+{
+    using namespace std::chrono_literals;
+
+    auto network = makeFakeNetworkAccessManager(true);
+    RemoteIoService service{network, &m_settings};
+    std::stop_source sourceLifetime;
+    QNetworkRequest request{QUrl{u"https://example.com/audio"_s}};
+    auto pending = service.prepareStream(request, QUrl{u"https://example.com"_s}, sourceLifetime.get_token());
+    QCoreApplication::processEvents();
+    ASSERT_FALSE(network->lastReply.isNull());
+    auto waiting = std::async(std::launch::async, [&]() { return pending->waitForReady(5s); });
+
+    sourceLifetime.request_stop();
+
+    EXPECT_EQ(waiting.wait_for(1s), std::future_status::ready);
+    EXPECT_FALSE(waiting.get());
+    EXPECT_FALSE(pending->isReady());
+}
+
+TEST_F(RemoteIoServiceTest, KeepsAuthenticatedStreamsOutOfDiskCache)
+{
+    using namespace std::chrono_literals;
+    const QByteArray audio(4096, 'a');
+    QTcpServer server;
+    ASSERT_TRUE(server.listen(QHostAddress::LocalHost));
+    QList<QByteArray> requests;
+    QObject::connect(&server, &QTcpServer::newConnection, &server, [&]() {
+        while(QTcpSocket* socket = server.nextPendingConnection()) {
+            auto request = std::make_shared<QByteArray>();
+            QObject::connect(socket, &QTcpSocket::readyRead, socket, [&, socket, request]() {
+                request->append(socket->readAll());
+                if(!request->contains("\r\n\r\n")) {
+                    return;
+                }
+                requests.append(*request);
+                socket->write("HTTP/1.1 200 OK\r\nCache-Control: max-age=3600\r\nContent-Type: audio/mpeg\r\n"
+                              "Accept-Ranges: bytes\r\nContent-Length: "
+                              + QByteArray::number(audio.size()) + "\r\nConnection: close\r\n\r\n" + audio);
+                socket->disconnectFromHost();
+            });
+            QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+        }
+    });
+
+    auto network = std::make_shared<QNetworkAccessManager>();
+    auto* cache  = new QNetworkDiskCache{network.get()};
+    cache->setCacheDirectory(m_tempDir.filePath(u"networkcache"_s));
+    network->setCache(cache);
+    RemoteIoService service{network, &m_settings};
+    const QUrl base{u"http://127.0.0.1:%1"_s.arg(server.serverPort())};
+    const QUrl url{base.resolved(QUrl{u"/audio"_s})};
+    std::stop_source sourceLifetime;
+
+    {
+        const QByteArray authorization{"Bearer synthetic-account-a"};
+        QNetworkRequest request{url};
+        request.setRawHeader("Authorization", authorization);
+        auto pending = service.prepareStream(request, base, sourceLifetime.get_token());
+        ASSERT_TRUE(waitFor([&]() { return pending->isFinished(); }));
+        ASSERT_TRUE(pending->isReady());
+        auto source    = pending->takeSource();
+        auto operation = std::async(std::launch::async, [&]() {
+            QByteArray data;
+            while(!source.device->atEnd()) {
+                const QByteArray chunk = source.device->read(1024);
+                if(chunk.isEmpty()) {
+                    break;
+                }
+                data += chunk;
+            }
+            return data;
+        });
+        ASSERT_TRUE(waitFor([&]() { return operation.wait_for(0ms) == std::future_status::ready; }));
+        EXPECT_EQ(operation.get(), audio);
+        source.device.reset();
+        ASSERT_FALSE(requests.empty());
+        EXPECT_TRUE(requests.back().contains(authorization));
+    }
+
+    {
+        const QByteArray authorization{"Bearer synthetic-account-b"};
+        QNetworkRequest request{url};
+        request.setRawHeader("Authorization", authorization);
+        auto pending = service.prepareStream(request, base, sourceLifetime.get_token());
+        ASSERT_TRUE(waitFor([&]() { return pending->isFinished(); }));
+        ASSERT_TRUE(pending->isReady());
+        auto source    = pending->takeSource();
+        auto operation = std::async(std::launch::async, [&]() {
+            QByteArray data;
+            while(!source.device->atEnd()) {
+                const QByteArray chunk = source.device->read(1024);
+                if(chunk.isEmpty()) {
+                    break;
+                }
+                data += chunk;
+            }
+            return data;
+        });
+        ASSERT_TRUE(waitFor([&]() { return operation.wait_for(0ms) == std::future_status::ready; }));
+        EXPECT_EQ(operation.get(), audio);
+        source.device.reset();
+        ASSERT_FALSE(requests.empty());
+        EXPECT_TRUE(requests.back().contains(authorization));
+    }
+
+    EXPECT_EQ(requests.size(), 2);
+    EXPECT_FALSE(cache->metaData(url).isValid());
 }
 } // namespace Fooyin::Testing

@@ -19,6 +19,7 @@
 
 #include "filterexpansionmodel.h"
 
+#include <core/library/musiclibrary.h>
 #include <gui/guiconstants.h>
 #include <gui/iconloader.h>
 #include <utils/datastream.h>
@@ -28,6 +29,11 @@
 #include <QMimeData>
 
 namespace Fooyin::Filters {
+ExpansionTrackModel::ExpansionTrackModel(MusicLibrary* library, QObject* parent)
+    : TreeModel{parent}
+    , m_library{library}
+{ }
+
 QVariant ExpansionTrackModel::data(const QModelIndex& index, int role) const
 {
     const auto* node = item(index);
@@ -156,6 +162,13 @@ TrackList ExpansionTrackModel::editTrackStat(const QModelIndex& index, const QMo
                                              const QVariant& value, InlineTrackEditor type)
 {
     const auto rows = selected.contains(index) ? selectedTracks(selected) : std::set{trackIndex(index)};
+    const Track::Stat stat = type == InlineTrackEditor::Love ? Track::Stat::Loved : Track::Stat::Rating;
+
+    if(m_library && std::ranges::any_of(rows, [this, stat](const int row) {
+           return row >= 0 && std::cmp_less(row, m_tracks.size()) && !m_library->canEditTrackStats(m_tracks[row], stat);
+       })) {
+        return {};
+    }
 
     TrackList tracks;
     tracks.reserve(rows.size());

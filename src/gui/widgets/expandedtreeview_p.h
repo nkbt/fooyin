@@ -191,6 +191,8 @@ public:
     bool m_updatingGeometry{false};
     int m_hidingScrollbar{0};
     bool m_layingOutItems{false};
+    int m_modelChangeDepth{0};
+    quint64 m_modelGeneration{0};
     bool m_preserveLayoutPosition{false};
 
     mutable std::vector<ExpandedTreeViewItem> m_viewItems;

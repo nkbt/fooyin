@@ -120,7 +120,7 @@ private:
 };
 
 FilterExpansionWidget::FilterExpansionWidget(TrackSelectionController* selection, CoverRepository* coverRepo,
-                                             QWidget* parent)
+                                             MusicLibrary* library, QWidget* parent)
     : QWidget{parent}
     , m_selection{selection}
     , m_coverProvider{coverRepo ? new CoverProvider(coverRepo, this) : nullptr}
@@ -129,7 +129,7 @@ FilterExpansionWidget::FilterExpansionWidget(TrackSelectionController* selection
     , m_context{new WidgetContext(this, Context{Constants::Context::TrackSelection}, this)}
     , m_runningGeneration{0}
     , m_workerBusy{false}
-    , m_model{new ExpansionTrackModel(this)}
+    , m_model{new ExpansionTrackModel(library, this)}
     , m_tracks{new ExpansionTrackView(this)}
     , m_footer{new ExpansionFooterWidget(this)}
     , m_close{new QToolButton(this)}

@@ -24,6 +24,7 @@
 #include "tageditorpanel.h"
 #include "tageditorpropertiestab.h"
 #include "tageditorsettings.h"
+#include "tageditorstats.h"
 #include "tagfilldialog.h"
 
 #include <core/engine/audioloader.h>
@@ -139,16 +140,16 @@ void TagEditorPlugin::initialise(const GuiPluginContext& context)
 
 TagEditorPropertiesTab* TagEditorPlugin::createEditor(const TrackList& tracks)
 {
-    auto* tagEditor = new TagEditorPropertiesTab(m_actionManager, m_registry, m_settings);
+    auto* tagEditor = new TagEditorPropertiesTab(m_actionManager, m_registry, m_library, m_settings);
     tagEditor->setReadOnly(!canWriteTracks(tracks, m_audioLoader));
     tagEditor->setTracks(tracks);
     QObject::connect(tagEditor, &TagEditorPropertiesTab::trackMetadataChanged, tagEditor,
-                     [this, tagEditor](const TrackList& changedTracks) {
-                         Q_EMIT tagEditor->writeRequestStarted(m_library->writeTrackMetadata(changedTracks));
+                     [this, tagEditor](const TrackList& changedTracks, const Track::Stats stats) {
+                         Q_EMIT tagEditor->writeRequestStarted(saveTrackMetadata(m_library, changedTracks, stats));
                      });
     QObject::connect(tagEditor, &TagEditorPropertiesTab::trackStatsChanged, m_library,
-                     [this](const TrackList& changedTracks) {
-                         m_library->updateTrackStats(changedTracks, Track::Stat::Rating | Track::Stat::Loved);
+                     [this](const TrackList& changedTracks, const Track::Stats stats) {
+                         saveTrackStats(m_library, changedTracks, stats & (Track::Stat::Rating | Track::Stat::Loved));
                      });
     return tagEditor;
 }

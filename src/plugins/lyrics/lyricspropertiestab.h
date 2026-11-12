@@ -48,7 +48,7 @@ public:
     [[nodiscard]] bool hasPendingScopeChanges() const override;
 
     bool commitPendingChanges() override;
-    void apply() override;
+    bool apply() override;
     void finish() override;
 
     [[nodiscard]] QSize sizeHint() const override;

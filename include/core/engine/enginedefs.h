@@ -108,6 +108,20 @@ struct TrackCommitContext
     uint64_t audibleDelayMs{0};
 };
 
+struct PlaybackOccurrenceContext
+{
+    Track track;
+    uint64_t playbackOccurrenceId{0};
+    uint64_t sourceGeneration{0};
+    uint64_t seekRequestId{0};
+    uint64_t itemId{0};
+    uint64_t generation{0};
+    uint64_t positionMs{0};
+    bool paused{false};
+    bool seekable{false};
+    bool failed{false};
+};
+
 enum RGProcess : uint8_t
 {
     NoProcessing = 0,
@@ -349,6 +363,7 @@ Q_DECLARE_METATYPE(Fooyin::Engine::TrackStatusContext)
 Q_DECLARE_METATYPE(Fooyin::Engine::AboutToFinishContext)
 Q_DECLARE_METATYPE(Fooyin::Engine::PlaybackItem)
 Q_DECLARE_METATYPE(Fooyin::Engine::TrackCommitContext)
+Q_DECLARE_METATYPE(Fooyin::Engine::PlaybackOccurrenceContext)
 Q_DECLARE_METATYPE(Fooyin::Engine::PlaybackOutputInfo)
 Q_DECLARE_METATYPE(Fooyin::Engine::AnalysisDataTypes)
 Q_DECLARE_METATYPE(Fooyin::LevelFrame)

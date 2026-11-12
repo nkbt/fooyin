@@ -1541,7 +1541,7 @@ void FilterWidget::setupConnections()
                          if(m_expansion) {
                              m_expansionTracks = std::make_shared<const TrackList>(m_expansion->tracks());
                          }
-                         m_library->updateTrackStats(tracks, stat);
+                         m_library->editTrackStats(tracks, stat);
                          refreshExpansionScripts({});
                      });
 
@@ -1812,7 +1812,7 @@ void FilterWidget::updateExpansion()
 void FilterWidget::submitExpansion(ExpansionRequest request)
 {
     if(!m_expansion) {
-        m_expansion = new FilterExpansionWidget(m_trackSelection, m_model->coverProvider()->repository());
+        m_expansion = new FilterExpansionWidget(m_trackSelection, m_model->coverProvider()->repository(), m_library);
         m_view->setExpansionWidget(m_expansion);
 
         QObject::connect(m_expansion, &FilterExpansionWidget::trackStatsChanged, this,

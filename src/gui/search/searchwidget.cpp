@@ -69,6 +69,10 @@ SearchWidget::SearchWidget(SearchController* controller, PlaylistController* pla
     , m_autoSearch{!isQuickSearch()}
     , m_showAll{false}
 {
+    QObject::connect(m_library, &MusicLibrary::sourceActivationChanged, this, [this]() {
+        ++m_searchRequestToken;
+        searchChanged();
+    });
     setObjectName(SearchWidget::name());
 
     auto* layout = new QHBoxLayout(this);
@@ -425,8 +429,11 @@ PlaylistTrackList SearchWidget::getTracksToSearch(SearchMode mode) const
             }
             return allTracks;
         }
-        case SearchMode::Library:
-            return PlaylistTrack::fromTracks(m_library->tracks(), {});
+        case SearchMode::Library: {
+            TrackList tracks = m_library->tracks();
+            std::erase_if(tracks, [this](const Track& track) { return !m_library->isTrackSourceActive(track); });
+            return PlaylistTrack::fromTracks(tracks, {});
+        }
         case SearchMode::PlaylistFilter:
             return {};
         case SearchMode::Playlist:

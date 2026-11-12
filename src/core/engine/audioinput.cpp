@@ -119,6 +119,11 @@ int AudioDecoder::bitrate() const
     return 0;
 }
 
+uint64_t AudioDecoder::sourceGeneration() const
+{
+    return 0;
+}
+
 void AudioDecoder::start() { }
 
 void AudioDecoder::requestAbort()

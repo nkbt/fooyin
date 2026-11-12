@@ -351,7 +351,7 @@ public:
     void setScopePanelVisible(bool visible, bool updatePreference = true);
 
 private:
-    void apply();
+    bool apply();
     void addWriteRequest(WriteRequest request);
     void updateTracks(const TrackList& tracks);
 
@@ -561,7 +561,9 @@ void PropertiesDialogWidget::done(int value)
 
 void PropertiesDialogWidget::accept()
 {
-    apply();
+    if(!apply()) {
+        return;
+    }
     m_closing = true;
     for(PropertiesTab& tab : m_tabs) {
         tab.finish();
@@ -578,23 +580,32 @@ void PropertiesDialogWidget::reject()
     done(Rejected);
 }
 
-void PropertiesDialogWidget::apply()
+bool PropertiesDialogWidget::apply()
 {
     if(m_writeProgress) {
         m_writeProgress->beginCollecting();
     }
 
+    bool applied{true};
     auto visitedTabs = std::views::filter(m_tabs, [&](const PropertiesTab& tab) { return tab.hasVisited(); });
     for(PropertiesTab& tab : visitedTabs) {
-        tab.apply();
+        if(!tab.apply()) {
+            applied = false;
+            break;
+        }
     }
 
     if(m_writeProgress) {
         m_writeProgress->finishCollecting();
     }
 
+    if(!applied) {
+        return false;
+    }
+
     m_session.acceptChanges();
     refreshScopePanel();
+    return true;
 }
 
 void PropertiesDialogWidget::addWriteRequest(WriteRequest request)
@@ -1141,7 +1152,10 @@ bool PropertiesTabWidget::canApply() const
 
 void PropertiesTabWidget::load() { }
 
-void PropertiesTabWidget::apply() { }
+bool PropertiesTabWidget::apply()
+{
+    return true;
+}
 
 void PropertiesTabWidget::finish() { }
 
@@ -1251,11 +1265,9 @@ void PropertiesTab::setVisited(bool visited)
     p->m_visited = visited;
 }
 
-void PropertiesTab::apply()
+bool PropertiesTab::apply()
 {
-    if(p->m_widget) {
-        p->m_widget->apply();
-    }
+    return !p->m_widget || p->m_widget->apply();
 }
 
 void PropertiesTab::finish()

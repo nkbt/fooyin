@@ -181,40 +181,153 @@ bool TrackDatabase::storeTracks(TrackList& tracks)
     }
 
     for(auto& track : tracks) {
-        if(track.id() < 0) {
-            if(!insertTrack(track, true)) {
-                return false;
-            }
-
-            if(track.id() < 0) {
-                if(const int existingTrackId = idForTrack(track); existingTrackId >= 0) {
-                    track.setId(existingTrackId);
-                }
-                else {
-                    return false;
-                }
-            }
-
-            Track::Stats importedStats{Track::Stat::Playcount};
-            if(track.rating() > 0) {
-                importedStats |= Track::Stat::Rating;
-            }
-
-            StoredTrackStats stats;
-            if(!insertOrUpdateStats(track, &stats, importedStats)) {
-                return false;
-            }
-
-            track.setAddedTime(stats.added);
-            track.setFirstPlayed(stats.firstPlayed);
-            track.setLastPlayed(stats.lastPlayed);
-            track.setPlayCount(stats.playCount);
-            track.setRating(stats.rating);
-            track.setLoved(stats.loved);
+        if(track.id() < 0 && !storeTrack(track, Track::Stat::None)) {
+            return false;
         }
     }
 
     return transaction.commit();
+}
+
+bool TrackDatabase::storeExternalSnapshot(const LibraryInfo& library, TrackList& addedTracks, TrackList& updatedTracks,
+                                          const TrackList& unchangedTracks, Track::Stats sourceStats)
+{
+    DbTransaction transaction{db()};
+
+    if(!transaction) {
+        return false;
+    }
+
+    static const QString statement = u"SELECT 1 FROM Libraries WHERE LibraryID = :libraryId AND Path = :path;"_s;
+
+    DbQuery libraryQuery{db(), statement};
+    libraryQuery.bindValue(u":libraryId"_s, library.id);
+    libraryQuery.bindValue(u":path"_s, library.path);
+
+    if(!libraryQuery.exec() || !libraryQuery.next()) {
+        return false;
+    }
+
+    for(auto& track : addedTracks) {
+        if(track.id() >= 0 || track.libraryId() != library.id || idForTrack(track) >= 0
+           || !storeTrack(track, sourceStats) || !reloadTrack(track)) {
+            return false;
+        }
+    }
+
+    static const QString ownerStatement = u"SELECT LibraryID FROM Tracks WHERE TrackID = :trackId;"_s;
+
+    for(auto& track : updatedTracks) {
+        if(track.libraryId() != library.id && track.libraryId() >= 0) {
+            return false;
+        }
+
+        DbQuery ownerQuery{db(), ownerStatement};
+        ownerQuery.bindValue(u":trackId"_s, track.id());
+
+        if(!ownerQuery.exec() || !ownerQuery.next()) {
+            return false;
+        }
+
+        const int ownerId = ownerQuery.value(0).toInt();
+        if(ownerId >= 0 && ownerId != library.id) {
+            return false;
+        }
+
+        const Track::Stats importedStats = track.libraryId() == library.id ? sourceStats : Track::Stat::None;
+        // A reload applies the stored statistics exactly; the play time setters only move earlier or later.
+        // A detached track already holds its stored statistics and keeps its disabled state.
+        if(!updateTrackData(track) || !insertOrUpdateStats(track, nullptr, importedStats, importedStats)
+           || (track.libraryId() == library.id && !reloadTrack(track))) {
+            return false;
+        }
+    }
+
+    for(const Track& track : unchangedTracks) {
+        DbQuery ownerQuery{db(), ownerStatement};
+        ownerQuery.bindValue(u":trackId"_s, track.id());
+
+        if(!ownerQuery.exec() || !ownerQuery.next() || ownerQuery.value(0).toInt() != library.id
+           || !insertOrUpdateStats(track, nullptr, sourceStats, sourceStats)) {
+            return false;
+        }
+    }
+
+    return transaction.commit();
+}
+
+bool TrackDatabase::storeExternalTrackStats(const LibraryInfo& library, TrackList& tracks, Track::Stats sourceStats)
+{
+    DbTransaction transaction{db()};
+
+    if(!transaction) {
+        return false;
+    }
+
+    static const QString statement = u"SELECT 1 FROM Libraries WHERE LibraryID = :libraryId AND Path = :path;"_s;
+
+    DbQuery libraryQuery{db(), statement};
+    libraryQuery.bindValue(u":libraryId"_s, library.id);
+    libraryQuery.bindValue(u":path"_s, library.path);
+
+    if(!libraryQuery.exec() || !libraryQuery.next()) {
+        return false;
+    }
+
+    static const QString ownerStatement = u"SELECT LibraryID FROM Tracks WHERE TrackID = :trackId;"_s;
+
+    for(auto& track : tracks) {
+        DbQuery ownerQuery{db(), ownerStatement};
+        ownerQuery.bindValue(u":trackId"_s, track.id());
+
+        if(!ownerQuery.exec() || !ownerQuery.next() || ownerQuery.value(0).toInt() != library.id) {
+            return false;
+        }
+
+        if(!insertOrUpdateStats(track, nullptr, sourceStats, sourceStats) || !reloadTrack(track)) {
+            return false;
+        }
+    }
+
+    return transaction.commit();
+}
+
+bool TrackDatabase::storeTrack(Track& track, Track::Stats sourceStats)
+{
+    if(!insertTrack(track, true)) {
+        return false;
+    }
+
+    if(track.id() < 0) {
+        if(const int existingTrackId = idForTrack(track); existingTrackId >= 0) {
+            track.setId(existingTrackId);
+        }
+        else {
+            return false;
+        }
+    }
+
+    Track::Stats importedStats{sourceStats};
+    if(track.externalLibraryPath().isEmpty()) {
+        importedStats |= Track::Stat::Playcount;
+        if(track.rating() > 0) {
+            importedStats |= Track::Stat::Rating;
+        }
+    }
+
+    StoredTrackStats stats;
+    if(!insertOrUpdateStats(track, &stats, importedStats, sourceStats)) {
+        return false;
+    }
+
+    track.setAddedTime(stats.added);
+    track.setFirstPlayed(stats.firstPlayed);
+    track.setLastPlayed(stats.lastPlayed);
+    track.setPlayCount(stats.playCount);
+    track.setRating(stats.rating);
+    track.setLoved(stats.loved);
+
+    return true;
 }
 
 bool TrackDatabase::updateTracks(TrackList& tracks)
@@ -392,6 +505,15 @@ int TrackDatabase::idForTrack(Track& track) const
 
 bool TrackDatabase::updateTrack(const Track& track)
 {
+    Track canonical{track};
+    if(reloadTrack(canonical) && !canonical.externalLibraryPath().isEmpty()) {
+        return false;
+    }
+    return updateTrackData(track);
+}
+
+bool TrackDatabase::updateTrackData(const Track& track)
+{
     if(track.id() < 0) {
         qCWarning(TRK_DB) << "Cannot update track" << track.filepath() << "(Invalid ID)";
         return false;
@@ -453,13 +575,24 @@ bool TrackDatabase::updateTrack(const Track& track)
 
 bool TrackDatabase::updateTrackStats(const Track& track)
 {
-    return insertOrUpdateStats(track);
+    Track updatedTrack{track};
+    return updateTrackStats(updatedTrack, Track::Stat::All);
 }
 
 bool TrackDatabase::updateTrackStats(Track& track, Track::Stats updatedStats)
 {
+    Track canonical{track};
+    if(reloadTrack(canonical)) {
+        updatedStats &= ~canonical.readOnlyStats();
+        track.setExternalLibraryPath(canonical.externalLibraryPath());
+        track.setReadOnlyStats(canonical.readOnlyStats());
+        if(!canonical.externalLibraryPath().isEmpty()) {
+            track.setFilePath(canonical.filepath());
+            track.generateHash();
+        }
+    }
     StoredTrackStats stats;
-    if(!insertOrUpdateStats(track, &stats, updatedStats)) {
+    if(!insertOrUpdateStats(track, &stats, updatedStats, Track::Stat::None)) {
         return false;
     }
 
@@ -484,7 +617,8 @@ bool TrackDatabase::updateTrackStats(const TrackList& tracks)
     }
 
     for(const Track& track : tracks) {
-        if(!insertOrUpdateStats(track)) {
+        Track updatedTrack{track};
+        if(!updateTrackStats(updatedTrack, Track::Stat::All)) {
             return false;
         }
     }
@@ -524,7 +658,7 @@ bool TrackDatabase::deleteTracks(const TrackList& tracks)
     return transaction.commit();
 }
 
-std::set<int> TrackDatabase::deleteLibraryTracks(int libraryId)
+std::optional<std::set<int>> TrackDatabase::deleteLibraryTracks(const LibraryInfo& library)
 {
     std::set<int> tracksToRemove;
 
@@ -534,7 +668,7 @@ std::set<int> TrackDatabase::deleteLibraryTracks(int libraryId)
 
         DbQuery query{db(), statement};
 
-        query.bindValue(u":libraryId"_s, libraryId);
+        query.bindValue(u":libraryId"_s, library.id);
 
         if(!query.exec()) {
             return {};
@@ -551,22 +685,63 @@ std::set<int> TrackDatabase::deleteLibraryTracks(int libraryId)
 
         DbQuery query{db(), statement};
 
-        query.bindValue(u":libraryId"_s, libraryId);
+        query.bindValue(u":libraryId"_s, library.id);
 
         if(!query.exec()) {
             return {};
         }
     }
 
-    static const QString statement = u"UPDATE Tracks SET LibraryID = :nonLibraryId WHERE LibraryID = :libraryId;"_s;
+    {
+        static const QString statement = u"UPDATE Tracks SET LibraryID = :nonLibraryId WHERE LibraryID = :libraryId;"_s;
 
-    DbQuery query{db(), statement};
+        DbQuery query{db(), statement};
 
-    query.bindValue(u":nonLibraryId"_s, u"-1"_s);
-    query.bindValue(u":libraryId"_s, libraryId);
+        query.bindValue(u":nonLibraryId"_s, u"-1"_s);
+        query.bindValue(u":libraryId"_s, library.id);
 
-    if(!query.exec()) {
+        if(!query.exec()) {
+            return {};
+        }
+    }
+
+    if(!Track::isVirtualPath(library.path)) {
+        return tracksToRemove;
+    }
+
+    // Tracks detached earlier also keep the source path, so the statistics owned by the source are found by path.
+    static const QString selectStatement
+        = u"SELECT TrackID, ExtraProperties FROM Tracks WHERE substr(FilePath, 1, length(:prefix)) = :prefix;"_s;
+
+    DbQuery selectQuery{db(), selectStatement};
+
+    selectQuery.bindValue(u":prefix"_s, QString{library.path + u'/'});
+
+    if(!selectQuery.exec()) {
         return {};
+    }
+
+    while(selectQuery.next()) {
+        Track track;
+        track.storeExtraProperties(selectQuery.value(1).toByteArray());
+
+        if(track.externalLibraryPath() != library.path || track.readOnlyStats() == Track::Stat::None) {
+            continue;
+        }
+
+        track.setReadOnlyStats(Track::Stat::None);
+
+        static const QString updateStatement
+            = u"UPDATE Tracks SET ExtraProperties = :extraProperties WHERE TrackID = :trackId;"_s;
+
+        DbQuery updateQuery{db(), updateStatement};
+
+        updateQuery.bindValue(u":extraProperties"_s, track.serialiseExtraProperties());
+        updateQuery.bindValue(u":trackId"_s, selectQuery.value(0).toInt());
+
+        if(!updateQuery.exec()) {
+            return {};
+        }
     }
 
     return tracksToRemove;
@@ -710,8 +885,8 @@ std::optional<TrackDatabase::StoredTrackStats> TrackDatabase::existingTrackStats
     };
 }
 
-bool TrackDatabase::insertOrUpdateStats(const Track& track, StoredTrackStats* mergedStats,
-                                        Track::Stats updatedStats) const
+bool TrackDatabase::insertOrUpdateStats(const Track& track, StoredTrackStats* mergedStats, Track::Stats updatedStats,
+                                        Track::Stats sourceStats) const
 {
     if(track.hash().isEmpty()) {
         qCWarning(TRK_DB) << "Cannot insert/update track stats (Hash empty)";
@@ -739,7 +914,15 @@ bool TrackDatabase::insertOrUpdateStats(const Track& track, StoredTrackStats* me
         dbNeedsUpdate = true;
     }
 
-    if(updatedStats.testFlag(Track::Stat::Playcount)) {
+    if(sourceStats.testFlag(Track::Stat::Playcount)) {
+        if(trackFirstPlayed != firstPlayed || trackLastPlayed != lastPlayed || trackPlayCount != playCount) {
+            firstPlayed   = trackFirstPlayed;
+            lastPlayed    = trackLastPlayed;
+            playCount     = trackPlayCount;
+            dbNeedsUpdate = true;
+        }
+    }
+    else if(updatedStats.testFlag(Track::Stat::Playcount)) {
         if((trackFirstPlayed != firstPlayed)
            && (firstPlayed == 0 || (trackFirstPlayed > 0 && trackFirstPlayed < firstPlayed))) {
             firstPlayed   = trackFirstPlayed;

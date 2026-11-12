@@ -18,6 +18,7 @@
  */
 
 #include "gui/filters/filtercontroller.h"
+#include "gui/filters/expansion/filterexpansionmodel.h"
 #include "gui/filters/filtermodel.h"
 #include "gui/filters/filterwidget.h"
 #include "gui/splitters/splitterwidget.h"
@@ -40,6 +41,7 @@
 #include <gui/playlist/currentplaylistcontroller.h>
 #include <gui/widgetprovider.h>
 #include <utils/actions/actionmanager.h>
+#include <utils/hearteditor.h>
 #include <utils/ratingsymbols.h>
 #include <utils/settings/settingsmanager.h>
 
@@ -689,6 +691,54 @@ TEST_F(FilterControllerTest, FilterModelSetRowsUpdatesExistingRowWithoutModelRes
     EXPECT_EQ(0, rowsRemovedSpy.count());
     ASSERT_EQ(1, dataChangedSpy.count());
     EXPECT_EQ(TrackIds({1, 2}), model.index(0, 0, {}).data(Filters::FilterItem::TrackIdsRole).value<TrackIds>());
+}
+
+TEST(FilterExpansionModelTest, LoveEditChangesNoTrackWhenAnySelectedTrackCannotBeEdited)
+{
+    class EditableTracksLibrary : public StubMusicLibrary
+    {
+    public:
+        [[nodiscard]] bool canEditTrackStats(const Track& track, Track::Stats /*stats*/) const override
+        {
+            return track.id() == 1;
+        }
+    };
+
+    Track editable{u"/music/editable.flac"_s};
+    editable.setId(1);
+    Track managed{u"/music/managed.flac"_s};
+    managed.setId(2);
+    Filters::ExpansionResult result;
+    result.tracks = std::make_shared<const TrackList>(TrackList{editable, managed});
+
+    EditableTracksLibrary library;
+    Filters::ExpansionTrackModel model{&library};
+    model.setContent(result);
+    const QModelIndex editableIndex = model.indexForTrack(0);
+    const QModelIndex managedIndex  = model.indexForTrack(1);
+    QSignalSpy dataChanged{&model, &QAbstractItemModel::dataChanged};
+
+    EXPECT_TRUE(
+        model.editTrackStat(editableIndex, {editableIndex, managedIndex}, HeartValue{true}, InlineTrackEditor::Love)
+            .empty());
+    EXPECT_TRUE(model.editTrackStat(managedIndex, {}, HeartValue{true}, InlineTrackEditor::Love).empty());
+    EXPECT_TRUE(dataChanged.empty());
+    EXPECT_FALSE(model.tracks().at(0).isLoved());
+    EXPECT_FALSE(model.tracks().at(1).isLoved());
+
+    const TrackList edited = model.editTrackStat(editableIndex, {}, HeartValue{true}, InlineTrackEditor::Love);
+    ASSERT_EQ(edited.size(), 1U);
+    EXPECT_EQ(edited.front().id(), 1);
+    EXPECT_TRUE(edited.front().isLoved());
+    EXPECT_EQ(dataChanged.size(), 1);
+
+    Filters::ExpansionTrackModel preview{nullptr};
+    preview.setContent(result);
+    EXPECT_EQ(preview
+                  .editTrackStat(preview.indexForTrack(0), {preview.indexForTrack(0), preview.indexForTrack(1)},
+                                 HeartValue{true}, InlineTrackEditor::Love)
+                  .size(),
+              2U);
 }
 } // namespace Fooyin::Testing
 

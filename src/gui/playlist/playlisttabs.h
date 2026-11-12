@@ -135,6 +135,7 @@ protected:
 
 private:
     void setupConnections();
+    void syncTabs();
     void setupButtons();
 
     void tabChanged(int index) const;

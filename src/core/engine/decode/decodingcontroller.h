@@ -84,6 +84,7 @@ public:
     [[nodiscard]] bool isValid() const;
     [[nodiscard]] bool isDecoding() const;
     [[nodiscard]] bool isSeekable() const;
+    [[nodiscard]] uint64_t sourceGeneration() const;
     [[nodiscard]] bool allowsConcurrentDecoding() const;
     [[nodiscard]] int playbackPrebufferMs() const;
     [[nodiscard]] AudioDecoder::RepeatHandling repeatHandling() const;

@@ -51,7 +51,7 @@ public:
     void loadTrackArtwork();
 
     void load() override;
-    void apply() override;
+    bool apply() override;
 
     void setTrackScope(const TrackList& tracks) override;
     bool commitPendingChanges() override;

@@ -1354,6 +1354,44 @@ void LibraryThreadHandler::cleanupTracks()
     });
 }
 
+QFuture<std::optional<std::pair<TrackList, TrackList>>>
+LibraryThreadHandler::storeExternalLibrarySnapshot(const LibraryInfo& library, const TrackList& addedTracks,
+                                                   const TrackList& updatedTracks, const TrackList& unchangedTracks,
+                                                   Track::Stats sourceStats)
+{
+    auto promise = std::make_shared<QPromise<std::optional<std::pair<TrackList, TrackList>>>>();
+    auto future  = promise->future();
+    promise->start();
+
+    QMetaObject::invokeMethod(&p->m_trackDatabaseManager,
+                              [this, promise, library, addedTracks, updatedTracks, unchangedTracks, sourceStats,
+                               workerToken = p->m_trackDatabaseManager.prepareWork()]() {
+                                  promise->addResult(p->m_trackDatabaseManager.storeExternalLibrarySnapshot(
+                                      library, addedTracks, updatedTracks, unchangedTracks, sourceStats, workerToken));
+                                  promise->finish();
+                              });
+
+    return future;
+}
+
+QFuture<std::optional<TrackList>> LibraryThreadHandler::storeExternalTrackStats(const LibraryInfo& library,
+                                                                                const TrackList& tracks,
+                                                                                Track::Stats sourceStats)
+{
+    auto promise = std::make_shared<QPromise<std::optional<TrackList>>>();
+    auto future  = promise->future();
+    promise->start();
+
+    QMetaObject::invokeMethod(&p->m_trackDatabaseManager, [this, promise, library, tracks, sourceStats,
+                                                           workerToken = p->m_trackDatabaseManager.prepareWork()]() {
+        promise->addResult(
+            p->m_trackDatabaseManager.storeExternalTrackStats(library, tracks, sourceStats, workerToken));
+        promise->finish();
+    });
+
+    return future;
+}
+
 void LibraryThreadHandler::libraryRemoved(int id)
 {
     if(p->m_scanRequests.empty()) {

@@ -886,6 +886,12 @@ void LibraryTreeWidget::setupConnections()
         }
     });
     QObject::connect(m_library, &MusicLibrary::visibleLibraryTracksChanged, this, &LibraryTreeWidget::refreshSearch);
+    QObject::connect(m_library, &MusicLibrary::sourceActivationChanged, this, [this]() {
+        ++m_searchRevision;
+        m_filteredTracks.clear();
+        m_model->reset({});
+        refreshSearch();
+    });
 
     QObject::connect(m_libraryManager, &LibraryManager::librariesChanged, this, &LibraryTreeWidget::reset);
 
@@ -1285,12 +1291,13 @@ void LibraryTreeWidget::refreshSearch()
     Utils::asyncExec([search = m_currentSearch, tracks]() {
         TrackQueryFilter filter;
         return filter.filter(search, tracks);
-    }).then(this, [this, search = m_currentSearch, revision](const TrackList& filteredTracks) {
+    }).then(this, [this, search = m_currentSearch, revision](TrackList filteredTracks) {
         if(m_currentSearch != search || m_searchRevision != revision) {
             return;
         }
 
-        m_filteredTracks = filteredTracks;
+        std::erase_if(filteredTracks, [this](const Track& track) { return !m_library->isTrackSourceActive(track); });
+        m_filteredTracks = std::move(filteredTracks);
 
         if(shouldAutoExpandSearchResults(m_filteredTracks)) {
             QObject::connect(m_model, &LibraryTreeModel::modelUpdated, this, &LibraryTreeWidget::expandSearchResults,
@@ -1514,27 +1521,38 @@ void LibraryTreeWidget::handleTracksAdded(const TrackList& tracks)
     if(tracks.empty() || m_library->hasActiveLibraryFilters()) {
         return;
     }
+    TrackList activeTracks = tracks;
+    std::erase_if(activeTracks, [this](const Track& track) { return !m_library->isTrackSourceActive(track); });
+    if(activeTracks.empty()) {
+        return;
+    }
 
     if(!m_currentSearch.isEmpty()) {
         const uint64_t revision{m_searchRevision};
-        Utils::asyncExec([search = m_currentSearch, tracks]() {
+        Utils::asyncExec([search = m_currentSearch, tracks = std::move(activeTracks)]() {
             TrackQueryFilter filter;
             return filter.filter(search, tracks);
-        }).then(this, [this, search = m_currentSearch, revision](const TrackList& filteredTracks) {
+        }).then(this, [this, search = m_currentSearch, revision](TrackList filteredTracks) {
             if(m_currentSearch != search || m_searchRevision != revision) {
                 return;
             }
 
+            std::erase_if(filteredTracks,
+                          [this](const Track& track) { return !m_library->isTrackSourceActive(track); });
             m_model->addTracks(filteredTracks);
         });
     }
     else {
-        m_model->addTracks(tracks);
+        m_model->addTracks(activeTracks);
     }
 }
 
 void LibraryTreeWidget::handleTracksUpdated(const TrackList& tracks)
 {
+    if(std::ranges::any_of(tracks, [this](const Track& track) { return !m_library->isTrackSourceActive(track); })) {
+        refreshSearch();
+        return;
+    }
     if(tracks.empty() || m_library->hasActiveLibraryFilters()) {
         return;
     }

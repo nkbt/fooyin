@@ -61,6 +61,7 @@ namespace {
 struct DecoderStats
 {
     std::atomic<int> initCalls{0};
+    std::atomic<bool> failInit{false};
     std::atomic<int> startCalls{0};
     std::atomic<int> stopCalls{0};
     std::atomic<int> seekCalls{0};
@@ -304,6 +305,9 @@ public:
         Q_UNUSED(options)
 
         ++m_stats->initCalls;
+        if(m_stats->failInit.load()) {
+            return {};
+        }
         m_track = track;
         m_format.setSampleRate(track.filenameExt().contains(u"sr2000"_s) ? 2000 : 1000);
         m_position         = track.offset();
@@ -584,6 +588,10 @@ struct EngineHarness : EngineSettingsFixture
 class AudioEngineTestAccessor
 {
 public:
+    static void fullReinitLoad(AudioEngine& engine, const Engine::PlaybackItem& item)
+    {
+        engine.executeFullReinitLoad(item, false, false);
+    }
     static bool prepareNextTrackImmediate(AudioEngine& engine, const Engine::PlaybackItem& item,
                                           uint64_t prefillTargetMs)
     {
@@ -2587,4 +2595,170 @@ FOOYIN_AUDIOENGINE_REGULAR_TEST(AudioEngineTest, TimelineTransitionHintsFollowRe
     EXPECT_FALSE(AudioEngine::shouldEnableTimelineTransitionHints(unknownDuration, AudioDecoder::PlaybackHints{},
                                                                   AudioDecoder::RepeatHandling::EngineTransition));
 }
+FOOYIN_AUDIOENGINE_REGULAR_TEST(AudioEngineTest, OccurrenceStartsOnlyAfterSourceOutputAndStopRetainsPosition)
+{
+    ensureCoreApplication();
+    EngineHarness harness{false};
+    harness.outputStats->setOutputState(0, 0, 0);
+    QSignalSpy started{&harness.engine, &AudioEngine::playbackOccurrenceStarted};
+    QSignalSpy ended{&harness.engine, &AudioEngine::playbackOccurrenceEnded};
+    const Track track = harness.createTrack(u"confirmed-output.fyt"_s, 0, 100000);
+    harness.engine.loadTrack(makePlaybackItem(track, 1), false);
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.trackStatus() == Engine::TrackStatus::Loaded; }));
+    EXPECT_TRUE(started.empty());
+    harness.engine.play();
+    ASSERT_EQ(harness.engine.playbackState(), Engine::PlaybackState::Playing);
+    EXPECT_TRUE(started.empty());
+    harness.outputStats->setOutputState(16, 0, 0);
+    ASSERT_TRUE(pumpUntil([&]() { return started.size() == 1; }));
+    const auto occurrence = started.front().front().value<Engine::PlaybackOccurrenceContext>();
+    EXPECT_EQ(occurrence.track.filepath(), track.filepath());
+    EXPECT_GT(occurrence.playbackOccurrenceId, 0U);
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.position() > 0; }));
+    harness.engine.stop();
+    ASSERT_TRUE(pumpUntil([&]() { return ended.size() == 1; }));
+    const auto final = ended.front().front().value<Engine::PlaybackOccurrenceContext>();
+    EXPECT_EQ(final.playbackOccurrenceId, occurrence.playbackOccurrenceId);
+    EXPECT_GT(final.positionMs, 0U);
+    EXPECT_FALSE(final.failed);
+    EXPECT_EQ(started.size(), 1);
+}
+
+FOOYIN_AUDIOENGINE_REGULAR_TEST(AudioEngineTest, OccurrenceIsStableAcrossPauseSeekAndFreshAfterStoppedReplay)
+{
+    ensureCoreApplication();
+    EngineHarness harness{false};
+    QSignalSpy started{&harness.engine, &AudioEngine::playbackOccurrenceStarted};
+    QSignalSpy ended{&harness.engine, &AudioEngine::playbackOccurrenceEnded};
+    const Track track = harness.createTrack(u"occurrence-replay.fyt"_s, 0, 100000);
+    harness.engine.loadTrack(makePlaybackItem(track, 1), false);
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.trackStatus() == Engine::TrackStatus::Loaded; }));
+    harness.engine.play();
+    ASSERT_TRUE(pumpUntil([&]() { return started.size() == 1; }));
+    const uint64_t first = started.front().front().value<Engine::PlaybackOccurrenceContext>().playbackOccurrenceId;
+    harness.engine.pause();
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.playbackState() == Engine::PlaybackState::Paused; }));
+    harness.engine.seekWithRequest(4000, 11);
+    harness.engine.play();
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.playbackState() == Engine::PlaybackState::Playing; }));
+    EXPECT_EQ(started.size(), 1);
+    EXPECT_TRUE(ended.empty());
+    harness.engine.stop();
+    ASSERT_TRUE(pumpUntil([&]() { return ended.size() == 1; }));
+    harness.engine.play();
+    ASSERT_TRUE(pumpUntil([&]() { return started.size() == 2; }));
+    EXPECT_NE(started.back().front().value<Engine::PlaybackOccurrenceContext>().playbackOccurrenceId, first);
+}
+
+FOOYIN_AUDIOENGINE_REGULAR_TEST(AudioEngineTest, FailedOutputInitializationDoesNotStartOccurrence)
+{
+    ensureCoreApplication();
+    EngineHarness harness{false};
+    harness.outputStats->failInit = true;
+    QSignalSpy started{&harness.engine, &AudioEngine::playbackOccurrenceStarted};
+    const Track track = harness.createTrack(u"output-failure.fyt"_s, 0, 100000);
+    harness.engine.loadTrack(makePlaybackItem(track, 1), false);
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.trackStatus() == Engine::TrackStatus::Invalid; }));
+    harness.engine.play();
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(started.empty());
+}
+
+FOOYIN_AUDIOENGINE_REGULAR_TEST(AudioEngineTest, FullReinitDecoderFailureEndsOutgoingOccurrenceOnceBeforeReplacement)
+{
+    ensureCoreApplication();
+    EngineHarness harness{false};
+    QSignalSpy started{&harness.engine, &AudioEngine::playbackOccurrenceStarted};
+    QSignalSpy ended{&harness.engine, &AudioEngine::playbackOccurrenceEnded};
+    const Track a = harness.createTrack(u"outgoing-decoder.fyt"_s, 0, 100000);
+    harness.engine.loadTrack(makePlaybackItem(a, 1), false);
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.trackStatus() == Engine::TrackStatus::Loaded; }));
+    harness.engine.play();
+    ASSERT_TRUE(pumpUntil([&]() { return started.size() == 1 && harness.engine.position() > 0; }));
+    const uint64_t position        = harness.engine.position();
+    const auto original            = started.front().front().value<Engine::PlaybackOccurrenceContext>();
+    const Track b                  = harness.createTrack(u"failed-decoder.fyt"_s, 0, 100000);
+    harness.decoderStats->failInit = true;
+    AudioEngineTestAccessor::fullReinitLoad(harness.engine, makePlaybackItem(b, 2));
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.trackStatus() == Engine::TrackStatus::Invalid; }));
+    ASSERT_EQ(ended.size(), 1);
+    const auto outgoing = ended.front().front().value<Engine::PlaybackOccurrenceContext>();
+    EXPECT_EQ(outgoing.playbackOccurrenceId, original.playbackOccurrenceId);
+    EXPECT_EQ(outgoing.track.filepath(), a.filepath());
+    EXPECT_GE(outgoing.positionMs, position);
+    EXPECT_FALSE(outgoing.failed);
+    harness.engine.pause();
+    EXPECT_EQ(started.size(), 1);
+    EXPECT_EQ(ended.size(), 1);
+    harness.decoderStats->failInit = false;
+    const Track c                  = harness.createTrack(u"recovered-decoder.fyt"_s, 0, 100000);
+    harness.engine.loadTrack(makePlaybackItem(c, 3), false);
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.trackStatus() == Engine::TrackStatus::Loaded; }));
+    harness.engine.play();
+    ASSERT_TRUE(pumpUntil([&]() { return started.size() == 2; }));
+    harness.engine.stop();
+    ASSERT_TRUE(pumpUntil([&]() { return ended.size() == 2; }));
+    EXPECT_EQ(ended.front().front().value<Engine::PlaybackOccurrenceContext>().playbackOccurrenceId,
+              original.playbackOccurrenceId);
+}
+
+FOOYIN_AUDIOENGINE_REGULAR_TEST(AudioEngineTest, FullReinitOutputFailureEndsOutgoingOccurrenceWithoutFailedAttribution)
+{
+    ensureCoreApplication();
+    EngineHarness harness{false};
+    QSignalSpy started{&harness.engine, &AudioEngine::playbackOccurrenceStarted};
+    QSignalSpy ended{&harness.engine, &AudioEngine::playbackOccurrenceEnded};
+    const Track a = harness.createTrack(u"outgoing-output.fyt"_s, 0, 100000);
+    harness.engine.loadTrack(makePlaybackItem(a, 1), false);
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.trackStatus() == Engine::TrackStatus::Loaded; }));
+    harness.engine.play();
+    ASSERT_TRUE(pumpUntil([&]() { return started.size() == 1 && harness.engine.position() > 0; }));
+    const uint64_t position       = harness.engine.position();
+    const auto original           = started.front().front().value<Engine::PlaybackOccurrenceContext>();
+    const Track b                 = harness.createTrack(u"failed-output-sr2000.fyt"_s, 0, 100000);
+    harness.outputStats->failInit = true;
+    AudioEngineTestAccessor::fullReinitLoad(harness.engine, makePlaybackItem(b, 2));
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.trackStatus() == Engine::TrackStatus::Invalid; }));
+    ASSERT_EQ(ended.size(), 1);
+    const auto outgoing = ended.front().front().value<Engine::PlaybackOccurrenceContext>();
+    EXPECT_EQ(outgoing.playbackOccurrenceId, original.playbackOccurrenceId);
+    EXPECT_GE(outgoing.positionMs, position);
+    EXPECT_FALSE(outgoing.failed);
+    harness.engine.pause();
+    EXPECT_EQ(started.size(), 1);
+    EXPECT_EQ(ended.size(), 1);
+    harness.engine.stop();
+    QCoreApplication::processEvents();
+    EXPECT_EQ(ended.size(), 1);
+}
+
+FOOYIN_AUDIOENGINE_REGULAR_TEST(AudioEngineTest, FullReinitOfSamePlaybackItemPreservesConfirmedOccurrence)
+{
+    ensureCoreApplication();
+    EngineHarness harness{false};
+    QSignalSpy started{&harness.engine, &AudioEngine::playbackOccurrenceStarted};
+    QSignalSpy ended{&harness.engine, &AudioEngine::playbackOccurrenceEnded};
+    const auto item = makePlaybackItem(harness.createTrack(u"same-item-reinit.fyt"_s, 0, 100000), 1);
+    harness.engine.loadTrack(item, false);
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.trackStatus() == Engine::TrackStatus::Loaded; }));
+    harness.engine.play();
+    ASSERT_TRUE(pumpUntil([&]() { return started.size() == 1; }));
+    QSignalSpy statuses{&harness.engine, &AudioEngine::trackStatusContextChanged};
+    AudioEngineTestAccessor::fullReinitLoad(harness.engine, item);
+    EXPECT_TRUE(std::ranges::any_of(statuses, [](const QVariantList& status) {
+        return status.front().value<Engine::TrackStatus>() == Engine::TrackStatus::Loaded;
+    }));
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.playbackState() == Engine::PlaybackState::Playing; }));
+    EXPECT_GE(harness.decoderStats->initCalls.load(), 2);
+    harness.engine.play();
+    harness.engine.seekWithRequest(4000, 9);
+    ASSERT_TRUE(pumpUntil([&]() { return harness.engine.position() >= 4000; }));
+    EXPECT_EQ(started.size(), 1);
+    EXPECT_TRUE(ended.isEmpty());
+    harness.engine.stop();
+    ASSERT_TRUE(pumpUntil([&]() { return ended.size() == 1; }));
+    EXPECT_EQ(ended.front().front().value<Engine::PlaybackOccurrenceContext>().playbackOccurrenceId,
+              started.front().front().value<Engine::PlaybackOccurrenceContext>().playbackOccurrenceId);
+}
+
 } // namespace Fooyin::Testing

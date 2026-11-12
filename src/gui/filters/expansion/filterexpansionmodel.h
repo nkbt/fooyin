@@ -19,12 +19,18 @@
 
 #pragma once
 
+#include "fygui_export.h"
+
 #include "filterexpansionpopulator.h"
 
 #include <utils/treeitem.h>
 #include <utils/treemodel.h>
 
 #include <set>
+
+namespace Fooyin {
+class MusicLibrary;
+} // namespace Fooyin
 
 namespace Fooyin::Filters {
 struct ExpansionTrackItem : TreeItem<ExpansionTrackItem>
@@ -35,7 +41,7 @@ struct ExpansionTrackItem : TreeItem<ExpansionTrackItem>
     int trackCount{0};
 };
 
-class ExpansionTrackModel : public TreeModel<ExpansionTrackItem>
+class FYGUI_EXPORT ExpansionTrackModel : public TreeModel<ExpansionTrackItem>
 {
 public:
     enum ExpansionTrackRole
@@ -48,7 +54,7 @@ public:
         InlineEditorsRole,
     };
 
-    using TreeModel::TreeModel;
+    explicit ExpansionTrackModel(MusicLibrary* library, QObject* parent = nullptr);
 
     [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override;
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
@@ -77,6 +83,7 @@ private:
     static QSize rowSize(const ExpansionRow& row);
     static ExpansionRow headerRow(const RichTextLayout& layout);
 
+    MusicLibrary* m_library;
     TrackList m_tracks;
     ExpansionRow m_header;
     ExpansionTrackItem* m_headerItem{nullptr};

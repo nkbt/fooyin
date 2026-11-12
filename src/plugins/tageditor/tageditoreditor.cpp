@@ -157,6 +157,11 @@ void TagEditorEditor::setReadOnly(bool readOnly)
     updateEditState();
 }
 
+void TagEditorEditor::setLovedEditable(bool editable)
+{
+    m_model->setLovedEditable(editable);
+}
+
 void TagEditorEditor::updateEditState()
 {
     const bool readOnly                = m_readOnly || m_loading;

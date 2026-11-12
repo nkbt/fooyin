@@ -60,6 +60,7 @@ private:
     void autoFillValues();
     void selectionChanged();
     void updateForTracks(const TrackList& tracks);
+    void updateLovedEditable();
 
     MusicLibrary* m_library;
     std::shared_ptr<AudioLoader> m_audioLoader;

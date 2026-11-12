@@ -138,9 +138,10 @@ void LibraryModel::markForAddition(const LibraryInfo& info)
     endInsertRows();
 }
 
-void LibraryModel::processQueue()
+QStringList LibraryModel::processQueue()
 {
     std::vector<QString> librariesToRemove;
+    QStringList librariesNotRemoved;
 
     for(auto& [path, library] : m_nodes) {
         const LibraryItem::ItemStatus status = library.status();
@@ -178,6 +179,7 @@ void LibraryModel::processQueue()
                 }
                 else {
                     qCWarning(LIB_MODEL) << "Library could not be removed:" << info.name;
+                    librariesNotRemoved.push_back(info.name);
                 }
                 break;
             }
@@ -201,6 +203,8 @@ void LibraryModel::processQueue()
     }
 
     invalidateData();
+
+    return librariesNotRemoved;
 }
 
 void LibraryModel::setScanProgress(const ScanProgress& progress)

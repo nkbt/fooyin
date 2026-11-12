@@ -27,6 +27,7 @@ class QDialog;
 
 namespace Fooyin {
 class ActionManager;
+class MusicLibrary;
 class SettingsManager;
 
 namespace TagEditor {
@@ -40,7 +41,7 @@ class TagEditorPropertiesTab : public PropertiesTabWidget
 
 public:
     explicit TagEditorPropertiesTab(ActionManager* actionManager, TagEditorFieldRegistry* registry,
-                                    SettingsManager* settings, QWidget* parent = nullptr);
+                                    MusicLibrary* library, SettingsManager* settings, QWidget* parent = nullptr);
     ~TagEditorPropertiesTab() override;
 
     void setTracks(const TrackList& tracks);
@@ -50,25 +51,28 @@ public:
     void setTrackScope(const TrackList& tracks) override;
     [[nodiscard]] bool hasPendingScopeChanges() const override;
     bool commitPendingChanges() override;
-    void apply() override;
+    bool apply() override;
     void updateTracks(const TrackList& tracks) override;
 
 Q_SIGNALS:
-    void trackMetadataChanged(const Fooyin::TrackList& tracks);
-    void trackStatsChanged(const Fooyin::TrackList& tracks);
+    void trackMetadataChanged(const Fooyin::TrackList& tracks, Fooyin::Track::Stats stats);
+    void trackStatsChanged(const Fooyin::TrackList& tracks, Fooyin::Track::Stats stats);
 
 private:
     void autoFillValues();
     void handleFillDialogAccepted(const FillValuesResult& result);
     TrackList commitCurrentScopeEdits();
+    [[nodiscard]] bool canSaveLoved();
     void stageTrackChanges(const TrackList& tracks, bool metadataChanges);
     void refreshTrackScope();
+    void updateLovedEditable();
     [[nodiscard]] TrackList activeTracks() const;
     static void mergeTracks(TrackList& destination, const TrackList& source);
 
     void saveState() const;
     void restoreState() const;
 
+    MusicLibrary* m_library;
     SettingsManager* m_settings;
     PropertiesDialogSession* m_session;
     TrackList m_tracks;
@@ -76,6 +80,7 @@ private:
     int m_activeTrackIndex;
     bool m_hasPendingMetadataChanges;
     bool m_hasPendingStatChanges;
+    Track::Stats m_pendingStats;
     QPointer<QDialog> m_fillDialog;
     TagEditorEditor* m_editor;
 };
