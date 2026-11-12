@@ -123,6 +123,12 @@ QString statePath(const QString& appendPath)
 
 QString sharePath(const QString& appendPath)
 {
+    if(QStandardPaths::isTestModeEnabled() && !isPortable()) {
+        const QString XDG_DATA_HOME = QFile::decodeName(qgetenv("XDG_DATA_HOME"));
+        if(QDir::isAbsolutePath(XDG_DATA_HOME)) {
+            return createPath(XDG_DATA_HOME, appendPath);
+        }
+    }
     static const auto path = isPortable() ? QCoreApplication::applicationDirPath() + "/data"_L1
                                           : QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     return createPath(path, appendPath);
@@ -130,6 +136,12 @@ QString sharePath(const QString& appendPath)
 
 QString cachePath(const QString& appendPath)
 {
+    if(QStandardPaths::isTestModeEnabled() && !isPortable()) {
+        const QString XDG_CACHE_HOME = QFile::decodeName(qgetenv("XDG_CACHE_HOME"));
+        if(QDir::isAbsolutePath(XDG_CACHE_HOME)) {
+            return createPath(XDG_CACHE_HOME, appendPath);
+        }
+    }
     static const auto path = isPortable() ? QCoreApplication::applicationDirPath() + "/cache"_L1
                                           : QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
     return createPath(path, appendPath);
