@@ -57,6 +57,7 @@ TagEditorPropertiesTab::TagEditorPropertiesTab(ActionManager* actionManager, Tag
     , m_activeTrackIndex{-1}
     , m_hasPendingMetadataChanges{false}
     , m_hasPendingStatChanges{false}
+    , m_pendingStats{Track::Stat::None}
     , m_editor{new TagEditorEditor(actionManager, registry, settings, this)}
 {
     setObjectName(u"TagEditorPropertiesTab"_s);
@@ -86,6 +87,7 @@ void TagEditorPropertiesTab::setTracks(const TrackList& tracks)
     m_activeTrackIndex          = tracks.size() == 1 ? 0 : -1;
     m_hasPendingMetadataChanges = false;
     m_hasPendingStatChanges     = false;
+    m_pendingStats              = Track::Stat::None;
     refreshTrackScope();
 }
 
@@ -137,7 +139,7 @@ void TagEditorPropertiesTab::apply()
 
     auto applyChanges = [this, updateStats]() {
         if(updateStats) {
-            Q_EMIT trackStatsChanged(m_pendingTracks);
+            Q_EMIT trackStatsChanged(m_pendingTracks, m_pendingStats);
         }
         else {
             Q_EMIT trackMetadataChanged(m_pendingTracks);
@@ -145,6 +147,7 @@ void TagEditorPropertiesTab::apply()
         m_pendingTracks.clear();
         m_hasPendingMetadataChanges = false;
         m_hasPendingStatChanges     = false;
+        m_pendingStats              = Track::Stat::None;
     };
 
     if(m_settings->fileValue(DontAskAgain).toBool() || allDbOnlyTracks(m_pendingTracks)) {
@@ -225,6 +228,7 @@ TrackList TagEditorPropertiesTab::commitCurrentScopeEdits()
     }
 
     const bool statOnly           = m_editor->hasOnlyStatChanges();
+    const Track::Stats stats      = m_editor->changedStats();
     const TrackList changedTracks = m_editor->applyChanges();
 
     if(!m_session) {
@@ -234,6 +238,7 @@ TrackList TagEditorPropertiesTab::commitCurrentScopeEdits()
 
     if(statOnly) {
         m_hasPendingStatChanges = true;
+        m_pendingStats |= stats;
     }
     else {
         m_hasPendingMetadataChanges = true;

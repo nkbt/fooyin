@@ -198,8 +198,7 @@ public:
     /** Returns @c true when @p stats can be changed outside the source which owns @p track. */
     [[nodiscard]] bool canUpdateTrackStats(const Track& track, Track::Stats stats) const;
     /*!
-     * Returns @c true when editTrackStats() can change @p stats of @p track, either directly or through a request to
-     * the handler of the active external library which owns them.
+     * Returns @c true when editTrackStats() can change @p stats of @p track, either directly or through a request to the handler of the active external library which owns them.
      */
     [[nodiscard]] virtual bool canEditTrackStats(const Track& track, Track::Stats stats) const;
     /** Shows or hides the tracks belonging to external @p library without removing them. */
@@ -207,9 +206,7 @@ public:
     /** Sets the @p stats which may only be changed by the owner of external @p library. */
     virtual void setExternalLibraryReadOnlyStats(const LibraryInfo& library, Track::Stats stats);
     /*!
-     * Makes @p handler responsible for changes to the source-owned @p stats of external @p library.
-     * editTrackStats() then emits externalTrackStatsChangeRequested() for those stats instead of dropping them.
-     * The handler is cleared when it is destroyed, when the library is removed, or when @p stats is empty.
+     * Makes @p handler responsible for changes to the source-owned @p stats of external @p library. editTrackStats() then emits externalTrackStatsChangeRequested() for those stats instead of dropping them. The handler is cleared when it is destroyed, when the library is removed, or when @p stats is empty.
      */
     virtual void setExternalLibraryStatsHandler(const LibraryInfo& library, Track::Stats stats, QObject* handler);
 
@@ -256,8 +253,7 @@ public:
     /** Updates the specified @p stats in the database for @p track. */
     virtual void updateTrackStats(const Track& track, Track::Stats stats) = 0;
     /*!
-     * Applies a user edit of @p stats to @p tracks. Stats which can be changed directly are updated as by
-     * updateTrackStats(), and handled source-owned stats are requested through externalTrackStatsChangeRequested().
+     * Applies a user edit of @p stats to @p tracks. Stats which can be changed directly are updated as by updateTrackStats(), and handled source-owned stats are requested through externalTrackStatsChangeRequested().
      */
     virtual void editTrackStats(const TrackList& tracks, Track::Stats stats);
 
@@ -281,10 +277,13 @@ public:
     virtual void applyExternalLibrarySnapshot(const LibraryInfo& library, const TrackList& tracks,
                                               const QUuid& operation) = 0;
     /*!
-     * Stores the source-owned @p stats of @p tracks reported by the source of external @p library.
-     * Only tracks of @p library change, other statistics and tracks are kept, and no change request is emitted.
+     * Publishes the source-owned @p stats of @p tracks reported by the source of external @p library, and stores them in commit order with snapshots. The values are copied exactly and replace the library values before this function returns, with tracksUpdated() and tracksStatsChanged() emitted at once. Only tracks of @p library change, other statistics and tracks are kept, and no change request is emitted.
+     *
+     * A rejected batch changes nothing. If the batch cannot be stored, each published track returns to its last stored values unless a later publication replaced it.
+     * @note @p operation must be unique and non-null; externalTrackStatsFinished() reports its result once, after the store.
      */
-    virtual void applyExternalTrackStats(const LibraryInfo& library, const TrackList& tracks, Track::Stats stats);
+    virtual void applyExternalTrackStats(const LibraryInfo& library, const TrackList& tracks, Track::Stats stats,
+                                         const QUuid& operation);
 
 Q_SIGNALS:
     /** Emitted whenever the progress state for a scan request changes. */
@@ -317,13 +316,14 @@ Q_SIGNALS:
     void externalLibrarySnapshotFinished(const QUuid& operation, int libraryId, bool success);
     void sourceActivationChanged();
     /*!
-     * Emitted when a native edit asks the handler of external @p library to change @p stats to the values in
-     * @p tracks. The library keeps its values until applyExternalTrackStats() stores a change.
+     * Emitted when a native edit asks the handler of external @p library to change @p stats to the values in @p tracks. The library keeps its values until the handler calls applyExternalTrackStats().
      */
     void externalTrackStatsChangeRequested(const Fooyin::LibraryInfo& library, const Fooyin::TrackList& tracks,
                                            Fooyin::Track::Stats stats);
     /** Emitted when the result of canEditTrackStats() can change because a stats handler was set or cleared. */
     void externalLibraryStatsHandlerChanged();
+    /** Reports the exact applyExternalTrackStats() operation and whether its statistics were stored. */
+    void externalTrackStatsFinished(const QUuid& operation, int libraryId, bool success);
 
     void activeLibraryFiltersChanged();
     void visibleLibraryTracksChanged();

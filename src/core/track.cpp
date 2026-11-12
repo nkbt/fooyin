@@ -2598,6 +2598,21 @@ void Track::setLastPlayed(uint64_t time)
     }
 }
 
+void Track::replaceStats(const Track& track, Stats stats)
+{
+    if(stats.testFlag(Stat::Loved)) {
+        setLoved(track.isLoved());
+    }
+    if(stats.testFlag(Stat::Rating)) {
+        setRating(track.rating());
+    }
+    if(stats.testFlag(Stat::Playcount)) {
+        setPlayCount(track.playCount());
+        p->firstPlayed = track.firstPlayed();
+        p->lastPlayed  = track.lastPlayed();
+    }
+}
+
 void Track::clearWasModified()
 {
     p->metadataWasModified = false;

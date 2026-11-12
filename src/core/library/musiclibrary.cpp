@@ -145,9 +145,11 @@ void MusicLibrary::setExternalLibraryStatsHandler(const LibraryInfo& /*library*/
                                                   QObject* /*handler*/)
 { }
 
-void MusicLibrary::applyExternalTrackStats(const LibraryInfo& /*library*/, const TrackList& /*tracks*/,
-                                           Track::Stats /*stats*/)
-{ }
+void MusicLibrary::applyExternalTrackStats(const LibraryInfo& library, const TrackList& /*tracks*/,
+                                           Track::Stats /*stats*/, const QUuid& operation)
+{
+    Q_EMIT externalTrackStatsFinished(operation, library.id, false);
+}
 
 bool MusicLibrary::hasActiveLibraryFilters() const
 {

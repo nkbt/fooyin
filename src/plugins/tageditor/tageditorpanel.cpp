@@ -20,6 +20,7 @@
 #include "tageditorpanel.h"
 
 #include "tageditoreditor.h"
+#include "tageditorstats.h"
 #include "tagfilldialog.h"
 
 #include <core/engine/audioloader.h>
@@ -162,7 +163,7 @@ bool TagEditorPanel::apply()
     }
 
     if(statOnly) {
-        m_library->updateTrackStats(changedTracks, stats);
+        saveTrackStats(m_library, changedTracks, stats);
     }
     else {
         m_library->writeTrackMetadata(changedTracks);

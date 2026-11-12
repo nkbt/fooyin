@@ -93,7 +93,8 @@ public:
     void setExternalLibraryReadOnlyStats(const LibraryInfo& library, Track::Stats stats) override;
     void setExternalLibraryStatsHandler(const LibraryInfo& library, Track::Stats stats, QObject* handler) override;
     [[nodiscard]] bool canEditTrackStats(const Track& track, Track::Stats stats) const override;
-    void applyExternalTrackStats(const LibraryInfo& library, const TrackList& tracks, Track::Stats stats) override;
+    void applyExternalTrackStats(const LibraryInfo& library, const TrackList& tracks, Track::Stats stats,
+                                 const QUuid& operation) override;
 
 private:
     std::unique_ptr<UnifiedMusicLibraryPrivate> p;

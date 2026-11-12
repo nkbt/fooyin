@@ -460,6 +460,8 @@ public:
     void setModifiedTime(uint64_t time);
     void setFirstPlayed(uint64_t time);
     void setLastPlayed(uint64_t time);
+    //! Copies @p stats from @p track exactly, unlike the setters, which only move play times outwards.
+    void replaceStats(const Track& track, Stats stats);
 
     //! Clears metadataWasModified() after changes have been saved or accepted.
     void clearWasModified();

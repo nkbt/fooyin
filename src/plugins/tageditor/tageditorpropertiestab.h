@@ -55,7 +55,7 @@ public:
 
 Q_SIGNALS:
     void trackMetadataChanged(const Fooyin::TrackList& tracks);
-    void trackStatsChanged(const Fooyin::TrackList& tracks);
+    void trackStatsChanged(const Fooyin::TrackList& tracks, Fooyin::Track::Stats stats);
 
 private:
     void autoFillValues();
@@ -76,6 +76,7 @@ private:
     int m_activeTrackIndex;
     bool m_hasPendingMetadataChanges;
     bool m_hasPendingStatChanges;
+    Track::Stats m_pendingStats;
     QPointer<QDialog> m_fillDialog;
     TagEditorEditor* m_editor;
 };

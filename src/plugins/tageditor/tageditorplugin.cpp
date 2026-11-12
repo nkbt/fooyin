@@ -24,6 +24,7 @@
 #include "tageditorpanel.h"
 #include "tageditorpropertiestab.h"
 #include "tageditorsettings.h"
+#include "tageditorstats.h"
 #include "tagfilldialog.h"
 
 #include <core/engine/audioloader.h>
@@ -147,8 +148,8 @@ TagEditorPropertiesTab* TagEditorPlugin::createEditor(const TrackList& tracks)
                          Q_EMIT tagEditor->writeRequestStarted(m_library->writeTrackMetadata(changedTracks));
                      });
     QObject::connect(tagEditor, &TagEditorPropertiesTab::trackStatsChanged, m_library,
-                     [this](const TrackList& changedTracks) {
-                         m_library->updateTrackStats(changedTracks, Track::Stat::Rating | Track::Stat::Loved);
+                     [this](const TrackList& changedTracks, const Track::Stats stats) {
+                         saveTrackStats(m_library, changedTracks, stats & (Track::Stat::Rating | Track::Stat::Loved));
                      });
     return tagEditor;
 }

@@ -145,6 +145,10 @@ if(TARGET fileops)
 endif()
 
 if(TARGET tageditor)
+    target_sources(test_unifiedmusiclibrary PRIVATE ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorstats.cpp)
+    target_include_directories(test_unifiedmusiclibrary PRIVATE ${CMAKE_SOURCE_DIR}/src/plugins/tageditor)
+    target_compile_definitions(test_unifiedmusiclibrary PRIVATE FOOYIN_TEST_TAGEDITOR)
+
     fooyin_add_test(
         test_tagfillpattern
         plugins/tageditor/tagfillpatterntest.cpp

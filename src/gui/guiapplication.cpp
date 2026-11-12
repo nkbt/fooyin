@@ -1482,6 +1482,13 @@ void GuiApplication::setupPlaybackStatisticsMenu()
             return;
         }
 
+        // The selection can hold copies from before an external library published a change.
+        for(auto& track : tracks) {
+            if(const Track libraryTrack = m_core->library()->trackForId(track.id()); libraryTrack.isValid()) {
+                track = libraryTrack;
+            }
+        }
+
         const bool newLoved = loved.value_or(!std::ranges::all_of(tracks, &Track::isLoved));
         for(auto& track : tracks) {
             track.setLoved(newLoved);
