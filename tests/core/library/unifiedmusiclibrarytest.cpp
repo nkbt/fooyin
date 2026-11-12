@@ -31,6 +31,7 @@
 #include "core/playlist/playlisthandler.h"
 #include "core/playlist/playlistloader.h"
 #ifdef FOOYIN_TEST_TAGEDITOR
+#include "gui/internalguisettings.h"
 #include "settings/tageditorfieldregistry.h"
 #include "tageditoritem.h"
 #include "tageditormodel.h"
@@ -52,10 +53,16 @@
 #ifdef FOOYIN_TEST_TAGEDITOR
 #include <core/constants.h>
 #include <gui/guisettings.h>
+#include <gui/propertiesdialog.h>
 #include <utils/actions/actionmanager.h>
+#include <utils/hearteditor.h>
 
 #include <QApplication>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QMainWindow>
+#include <QPointer>
+#include <QPushButton>
 #include <QTimer>
 #endif
 
@@ -3575,6 +3582,226 @@ TEST_F(UnifiedMusicLibraryTest, TagEditorPropertiesTabLovedFollowsTheSourceCapab
     ASSERT_EQ(requests.front().first.size(), 1U);
     EXPECT_EQ(requests.front().first.front().id(), track.id());
     EXPECT_TRUE(requests.front().first.front().isLoved());
+}
+
+TEST_F(UnifiedMusicLibraryTest, TagEditorPropertiesTabMixedSaveSendsLovedToTheSource)
+{
+    auto& settings = context().settings;
+    settings.createTempSetting<Settings::Gui::TrackEditorAppearance>(QVariant::fromValue(TrackEditorAppearance{}));
+    settings.createSetting(QString::fromLatin1(TagEditor::SettingsKeys::MultiValueSeparators),
+                           QString::fromLatin1(TagEditor::SettingsKeys::DefaultMultiValueSeparators));
+    settings.createSetting(QString::fromLatin1(TagEditor::SettingsKeys::AutoFillMultiValueSeparators),
+                           QString::fromLatin1(TagEditor::SettingsKeys::DefaultMultiValueSeparators));
+    settings.createSetting(QString::fromLatin1(TagEditor::SettingsKeys::EditValuesOnSingleClick), true);
+    settings.fileSet(u"TagEditor/DontAskAgain"_s, true);
+
+    const auto library = context().library.addExternalLibrary(u"test-source://mixed"_s, u"External"_s);
+    ASSERT_TRUE(library);
+    context().library.setExternalLibraryReadOnlyStats(*library, Track::Stat::Loved);
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(*library, {externalTrack(u"test-source://mixed/item"_s, u"Item"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const Track track = tracksByPath(context().library.libraryTracks()).at(u"test-source://mixed/item"_s);
+    auto* playlist
+        = context().playlistHandler.createPlaylist(u"Local"_s, {Track{u"cdda:///I5l9cCSFccLKFEKS.7wqSZAorPU-"_s, 0}});
+    ASSERT_NE(playlist, nullptr);
+    const Track localTrack = playlist->tracks().front();
+    ASSERT_TRUE(localTrack.isInDatabase());
+
+    QObject handler;
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::Loved, &handler);
+    std::vector<std::pair<TrackList, Track::Stats>> requests;
+    QObject::connect(&context().library, &MusicLibrary::externalTrackStatsChangeRequested, &context().library,
+                     [&requests](const LibraryInfo& /*library*/, const TrackList& tracks, Track::Stats stats) {
+                         requests.emplace_back(tracks, stats);
+                     });
+
+    QMainWindow mainWindow;
+    ActionManager actionManager{&settings};
+    actionManager.setMainWindow(&mainWindow);
+    TagEditor::TagEditorFieldRegistry registry{&settings};
+    TagEditor::TagEditorPropertiesTab tab{&actionManager, &registry, &context().library, &settings};
+    std::vector<WriteRequest> writeRequests;
+    QObject::connect(&tab, &TagEditor::TagEditorPropertiesTab::trackMetadataChanged, &context().library,
+                     [this, &writeRequests](const TrackList& tracks, Track::Stats stats) {
+                         writeRequests.push_back(TagEditor::saveTrackMetadata(&context().library, tracks, stats));
+                     });
+    QObject::connect(&tab, &TagEditor::TagEditorPropertiesTab::trackStatsChanged, &context().library,
+                     [this](const TrackList& tracks, Track::Stats stats) {
+                         TagEditor::saveTrackStats(&context().library, tracks, stats);
+                     });
+
+    auto* model = tab.findChild<TagEditor::TagEditorModel*>();
+    ASSERT_NE(model, nullptr);
+    const auto fieldIndex = [model](const char* field) {
+        for(int row{0}; row < model->rowCount({}); ++row) {
+            const QModelIndex index = model->index(row, 1, {});
+            if(static_cast<TagEditor::TagEditorItem*>(index.internalPointer())
+                   ->field()
+                   .scriptField.compare(QLatin1StringView{field}, Qt::CaseInsensitive)
+               == 0) {
+                return index;
+            }
+        }
+        return QModelIndex{};
+    };
+
+    tab.setTracks({track, localTrack});
+    ASSERT_TRUE(waitForCondition([&]() {
+        return fieldIndex(Constants::MetaData::LoveEditor).isValid()
+            && fieldIndex(Constants::MetaData::Title).isValid();
+    }));
+    ASSERT_TRUE(model->setData(fieldIndex(Constants::MetaData::Title), u"Edited"_s, Qt::EditRole));
+    ASSERT_TRUE(model->setData(fieldIndex(Constants::MetaData::LoveEditor), u"1"_s, Qt::EditRole));
+
+    tab.apply();
+    ASSERT_EQ(writeRequests.size(), 1U);
+    ASSERT_TRUE(writeRequests.front().finished.isValid());
+    ASSERT_TRUE(waitForCondition([&]() { return writeRequests.front().finished.isFinished(); }));
+    EXPECT_EQ(writeRequests.front().finished.result().succeeded, 1);
+    EXPECT_EQ(writeRequests.front().finished.result().failed, 1);
+    QSignalSpy loadedSpy{&context().library, &MusicLibrary::tracksLoaded};
+    context().library.loadAllTracks();
+    waitForSignal(loadedSpy);
+    EXPECT_EQ(context().library.trackForId(localTrack.id()).title(), u"Edited"_s);
+    EXPECT_TRUE(context().library.trackForId(localTrack.id()).isLoved());
+    EXPECT_EQ(context().library.trackForId(track.id()).title(), u"Item"_s);
+    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
+
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_EQ(requests.front().second, Track::Stats{Track::Stat::Loved});
+    ASSERT_EQ(requests.front().first.size(), 1U);
+    EXPECT_EQ(requests.front().first.front().id(), track.id());
+    EXPECT_EQ(requests.front().first.front().title(), u"Item"_s);
+    EXPECT_TRUE(requests.front().first.front().isLoved());
+}
+
+TEST_F(UnifiedMusicLibraryTest, PropertiesDialogKeepsLovedChangesWhenTheSourceRejectsThem)
+{
+    const QByteArray previousStateDirectory = qgetenv("XDG_STATE_HOME");
+    qputenv("XDG_STATE_HOME", context().tempDir.filePath(u"state"_s).toUtf8());
+    const auto restoreStateDirectory = qScopeGuard([&]() {
+        if(previousStateDirectory.isNull()) {
+            qunsetenv("XDG_STATE_HOME");
+        }
+        else {
+            qputenv("XDG_STATE_HOME", previousStateDirectory);
+        }
+    });
+
+    auto& settings = context().settings;
+    settings.createTempSetting<Settings::Gui::TrackEditorAppearance>(QVariant::fromValue(TrackEditorAppearance{}));
+    settings.createTempSetting<Settings::Gui::Internal::PropertiesSidebarTrackScript>(u"%title%"_s);
+    settings.createSetting(QString::fromLatin1(TagEditor::SettingsKeys::MultiValueSeparators),
+                           QString::fromLatin1(TagEditor::SettingsKeys::DefaultMultiValueSeparators));
+    settings.createSetting(QString::fromLatin1(TagEditor::SettingsKeys::AutoFillMultiValueSeparators),
+                           QString::fromLatin1(TagEditor::SettingsKeys::DefaultMultiValueSeparators));
+    settings.createSetting(QString::fromLatin1(TagEditor::SettingsKeys::EditValuesOnSingleClick), true);
+    settings.fileSet(u"TagEditor/DontAskAgain"_s, true);
+
+    const auto library = context().library.addExternalLibrary(u"test-source://dialog"_s, u"External"_s);
+    ASSERT_TRUE(library);
+    context().library.setExternalLibraryReadOnlyStats(*library, Track::Stat::Loved);
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(*library, {externalTrack(u"test-source://dialog/item"_s, u"Item"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const Track track = tracksByPath(context().library.libraryTracks()).at(u"test-source://dialog/item"_s);
+
+    std::vector<std::pair<TrackList, Track::Stats>> requests;
+    QObject::connect(&context().library, &MusicLibrary::externalTrackStatsChangeRequested, &context().library,
+                     [&requests](const LibraryInfo& /*library*/, const TrackList& tracks, Track::Stats stats) {
+                         requests.emplace_back(tracks, stats);
+                     });
+
+    QMainWindow mainWindow;
+    ActionManager actionManager{&settings};
+    actionManager.setMainWindow(&mainWindow);
+    TagEditor::TagEditorFieldRegistry registry{&settings};
+    PropertiesDialog propertiesDialog{&actionManager, &settings};
+    propertiesDialog.addTab(u"Metadata"_s, [&](const TrackList& tracks) {
+        auto* tab = new TagEditor::TagEditorPropertiesTab(&actionManager, &registry, &context().library, &settings);
+        tab->setTracks(tracks);
+        QObject::connect(tab, &TagEditor::TagEditorPropertiesTab::trackMetadataChanged, tab,
+                         [this, tab](const TrackList& changedTracks, Track::Stats stats) {
+                             Q_EMIT tab->writeRequestStarted(
+                                 TagEditor::saveTrackMetadata(&context().library, changedTracks, stats));
+                         });
+        QObject::connect(tab, &TagEditor::TagEditorPropertiesTab::trackStatsChanged, &context().library,
+                         [this](const TrackList& changedTracks, Track::Stats stats) {
+                             TagEditor::saveTrackStats(&context().library, changedTracks, stats);
+                         });
+        return tab;
+    });
+
+    propertiesDialog.show({track});
+    QPointer<QDialog> dialog{mainWindow.findChild<QDialog*>()};
+    ASSERT_TRUE(dialog);
+    ASSERT_TRUE(dialog->isVisible());
+    auto* tab = dialog->findChild<TagEditor::TagEditorPropertiesTab*>();
+    ASSERT_NE(tab, nullptr);
+    auto* model = tab->findChild<TagEditor::TagEditorModel*>();
+    ASSERT_NE(model, nullptr);
+    auto* buttonBox = dialog->findChild<QDialogButtonBox*>();
+    ASSERT_NE(buttonBox, nullptr);
+    const auto lovedIndex = [model]() {
+        for(int row{0}; row < model->rowCount({}); ++row) {
+            const QModelIndex index = model->index(row, 1, {});
+            if(static_cast<TagEditor::TagEditorItem*>(index.internalPointer())
+                   ->field()
+                   .scriptField.compare(QLatin1StringView{Constants::MetaData::LoveEditor}, Qt::CaseInsensitive)
+               == 0) {
+                return index;
+            }
+        }
+        return QModelIndex{};
+    };
+    ASSERT_TRUE(waitForCondition([&]() { return lovedIndex().isValid(); }));
+
+    auto handler = std::make_unique<QObject>();
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::Loved, handler.get());
+    const auto shownLoved = [&]() {
+        return model->data(lovedIndex(), Qt::DisplayRole).value<HeartValue>().loved();
+    };
+    ASSERT_FALSE(shownLoved());
+    ASSERT_TRUE(model->setData(lovedIndex(), u"1"_s, Qt::EditRole));
+    ASSERT_TRUE(shownLoved());
+    handler.reset();
+
+    int warnings{0};
+    QTimer closeWarning;
+    QObject::connect(&closeWarning, &QTimer::timeout, &closeWarning, [&warnings]() {
+        if(auto* warning = QApplication::activeModalWidget()) {
+            ++warnings;
+            warning->close();
+        }
+    });
+    closeWarning.start(10);
+    buttonBox->button(QDialogButtonBox::Ok)->click();
+    closeWarning.stop();
+    EXPECT_EQ(warnings, 1);
+    ASSERT_TRUE(dialog);
+    EXPECT_TRUE(dialog->isVisible());
+    EXPECT_EQ(dialog->result(), 0);
+    ASSERT_TRUE(lovedIndex().isValid());
+    EXPECT_TRUE(shownLoved());
+    EXPECT_TRUE(requests.empty());
+    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
+
+    QObject restoredHandler;
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::Loved, &restoredHandler);
+    buttonBox->button(QDialogButtonBox::Apply)->click();
+    EXPECT_TRUE(dialog->isVisible());
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_EQ(requests.front().second, Track::Stats{Track::Stat::Loved});
+    ASSERT_EQ(requests.front().first.size(), 1U);
+    EXPECT_EQ(requests.front().first.front().id(), track.id());
+    EXPECT_TRUE(requests.front().first.front().isLoved());
+
+    buttonBox->button(QDialogButtonBox::Ok)->click();
+    EXPECT_TRUE(!dialog || !dialog->isVisible());
+    EXPECT_EQ(requests.size(), 1U);
 }
 #endif
 } // namespace Fooyin::Testing

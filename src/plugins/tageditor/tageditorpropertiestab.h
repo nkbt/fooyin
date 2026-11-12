@@ -51,11 +51,12 @@ public:
     void setTrackScope(const TrackList& tracks) override;
     [[nodiscard]] bool hasPendingScopeChanges() const override;
     bool commitPendingChanges() override;
+    [[nodiscard]] bool prepareApply() override;
     void apply() override;
     void updateTracks(const TrackList& tracks) override;
 
 Q_SIGNALS:
-    void trackMetadataChanged(const Fooyin::TrackList& tracks);
+    void trackMetadataChanged(const Fooyin::TrackList& tracks, Fooyin::Track::Stats stats);
     void trackStatsChanged(const Fooyin::TrackList& tracks, Fooyin::Track::Stats stats);
 
 private:

@@ -131,21 +131,26 @@ bool TagEditorPropertiesTab::commitPendingChanges()
     return true;
 }
 
-void TagEditorPropertiesTab::apply()
+bool TagEditorPropertiesTab::prepareApply()
 {
     const TrackList changedTracks = commitCurrentScopeEdits();
     if(!changedTracks.empty()) {
         Q_EMIT tracksChanged(changedTracks);
     }
 
-    if(m_pendingTracks.empty()) {
-        return;
+    if(canSaveTrackStats(m_library, m_pendingTracks, m_pendingStats)) {
+        return true;
     }
 
-    if(!canSaveTrackStats(m_library, m_pendingTracks, m_pendingStats)) {
-        QMessageBox::warning(
-            this, tr("Unable to Save Changes"),
-            tr("The source of these tracks can’t change Loved at the moment. The changes were not saved."));
+    QMessageBox::warning(
+        this, tr("Unable to Save Changes"),
+        tr("The source of these tracks can’t change Loved at the moment. The changes were not saved."));
+    return false;
+}
+
+void TagEditorPropertiesTab::apply()
+{
+    if(!prepareApply() || m_pendingTracks.empty()) {
         return;
     }
 
@@ -156,7 +161,7 @@ void TagEditorPropertiesTab::apply()
             Q_EMIT trackStatsChanged(m_pendingTracks, m_pendingStats);
         }
         else {
-            Q_EMIT trackMetadataChanged(m_pendingTracks);
+            Q_EMIT trackMetadataChanged(m_pendingTracks, m_pendingStats);
         }
         m_pendingTracks.clear();
         m_hasPendingMetadataChanges = false;

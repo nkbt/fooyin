@@ -22,6 +22,7 @@
 #include <core/library/musiclibrary.h>
 
 #include <algorithm>
+#include <iterator>
 
 namespace Fooyin::TagEditor {
 void saveTrackStats(MusicLibrary* library, const TrackList& tracks, const Track::Stats stats)
@@ -32,6 +33,23 @@ void saveTrackStats(MusicLibrary* library, const TrackList& tracks, const Track:
     if(const Track::Stats otherStats = stats & ~Track::Stats{Track::Stat::Loved}; otherStats != Track::Stat::None) {
         library->updateTrackStats(tracks, otherStats);
     }
+}
+
+WriteRequest saveTrackMetadata(MusicLibrary* library, const TrackList& tracks, const Track::Stats stats)
+{
+    WriteRequest request = library->writeTrackMetadata(tracks);
+
+    if(stats.testFlag(Track::Stat::Loved)) {
+        TrackList sourceTracks;
+        std::ranges::copy_if(tracks, std::back_inserter(sourceTracks), [library](const Track& track) {
+            return library->trackForId(track.id()).readOnlyStats().testFlag(Track::Stat::Loved);
+        });
+        if(!sourceTracks.empty()) {
+            library->editTrackStats(sourceTracks, Track::Stat::Loved);
+        }
+    }
+
+    return request;
 }
 
 bool canSaveTrackStats(MusicLibrary* library, const TrackList& tracks, const Track::Stats stats)

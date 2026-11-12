@@ -144,8 +144,8 @@ TagEditorPropertiesTab* TagEditorPlugin::createEditor(const TrackList& tracks)
     tagEditor->setReadOnly(!canWriteTracks(tracks, m_audioLoader));
     tagEditor->setTracks(tracks);
     QObject::connect(tagEditor, &TagEditorPropertiesTab::trackMetadataChanged, tagEditor,
-                     [this, tagEditor](const TrackList& changedTracks) {
-                         Q_EMIT tagEditor->writeRequestStarted(m_library->writeTrackMetadata(changedTracks));
+                     [this, tagEditor](const TrackList& changedTracks, const Track::Stats stats) {
+                         Q_EMIT tagEditor->writeRequestStarted(saveTrackMetadata(m_library, changedTracks, stats));
                      });
     QObject::connect(tagEditor, &TagEditorPropertiesTab::trackStatsChanged, m_library,
                      [this](const TrackList& changedTracks, const Track::Stats stats) {

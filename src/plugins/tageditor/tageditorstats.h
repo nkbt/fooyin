@@ -23,10 +23,13 @@
 
 namespace Fooyin {
 class MusicLibrary;
+struct WriteRequest;
 
 namespace TagEditor {
 //! Saves edited @p stats of @p tracks. Loved uses the native edit path, so an external library can own it.
 void saveTrackStats(MusicLibrary* library, const TrackList& tracks, Track::Stats stats);
+//! Writes the metadata of @p tracks, and sends their edited Loved value to the external libraries which own it.
+WriteRequest saveTrackMetadata(MusicLibrary* library, const TrackList& tracks, Track::Stats stats);
 //! Returns @c true when saveTrackStats() can change @p stats of every track in @p tracks.
 [[nodiscard]] bool canSaveTrackStats(MusicLibrary* library, const TrackList& tracks, Track::Stats stats);
 } // namespace TagEditor

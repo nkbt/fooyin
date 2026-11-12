@@ -175,7 +175,7 @@ bool TagEditorPanel::apply()
         saveTrackStats(m_library, changedTracks, stats);
     }
     else {
-        m_library->writeTrackMetadata(changedTracks);
+        saveTrackMetadata(m_library, changedTracks, stats);
     }
 
     return true;
