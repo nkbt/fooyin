@@ -44,11 +44,13 @@ public:
     bool storeTracks(TrackList& tracks);
     /*!
      * Inserts @p addedTracks and updates @p updatedTracks in one transaction while @p library is still registered.
-     * Fails without changes if a track belongs to another library. Statistics of updated tracks are merged under their
-     * current hash, as for a library scan.
+     * Fails without changes if a track belongs to another library. Statistics in @p sourceStats replace the stored
+     * values of tracks in @p library; other statistics keep their stored values. Both lists are reloaded as stored.
      */
     bool storeExternalSnapshot(const LibraryInfo& library, TrackList& addedTracks, TrackList& updatedTracks,
                                Track::Stats sourceStats);
+    /** Clears the source-owned statistics of @p tracks in one transaction after their external library is removed. */
+    bool clearReadOnlyStats(const TrackList& tracks);
     bool updateTracks(TrackList& tracks);
     std::expected<void, QString> writeScanBatch(TrackList& tracksToStore, TrackList& tracksToUpdate);
 
@@ -88,8 +90,8 @@ private:
         bool loved{false};
     };
     std::optional<StoredTrackStats> existingTrackStats(const QString& hash) const;
-    bool insertOrUpdateStats(const Track& track, StoredTrackStats* mergedStats = nullptr,
-                             Track::Stats updatedStats = Track::Stat::All) const;
+    bool insertOrUpdateStats(const Track& track, StoredTrackStats* mergedStats, Track::Stats updatedStats,
+                             Track::Stats sourceStats) const;
 
     void removeUnmanagedTracks() const;
     void updateLastSeenStats() const;

@@ -64,6 +64,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <future>
@@ -1922,6 +1923,108 @@ TEST_F(UnifiedMusicLibraryTest, ExternalLovedIsAuthoritativeIsolatedAndProtected
     EXPECT_FALSE(context().library.canUpdateTrackStats(context().library.trackForId(storedA.id()), Track::Stat::Loved));
 }
 
+TEST_F(UnifiedMusicLibraryTest, ExternalSnapshotReplacesSourceOwnedStatisticsAndPreservesLocalStatistics)
+{
+    const auto owned = context().library.addExternalLibrary(u"test-source://owned"_s, u"Owned"_s);
+    const auto loved = context().library.addExternalLibrary(u"test-source://loved"_s, u"Loved"_s);
+    ASSERT_TRUE(owned);
+    ASSERT_TRUE(loved);
+    context().library.setExternalLibraryReadOnlyStats(*owned, Track::Stat::Rating | Track::Stat::Playcount);
+    context().library.setExternalLibraryReadOnlyStats(*loved, Track::Stat::Loved);
+
+    Track ownedSource = externalTrack(u"test-source://owned/item"_s, u"Owned"_s);
+    ownedSource.setRating(0.4F);
+    ownedSource.setPlayCount(9);
+    ownedSource.setFirstPlayed(100);
+    ownedSource.setLastPlayed(500);
+    Track lovedSource = externalTrack(u"test-source://loved/item"_s, u"Loved"_s);
+    lovedSource.setLoved(true);
+
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(*owned, {ownedSource}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    context().library.applyExternalLibrarySnapshot(*loved, {lovedSource}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+
+    const auto imported    = tracksByPath(context().library.libraryTracks());
+    const Track ownedTrack = imported.at(ownedSource.filepath());
+    const Track lovedTrack = imported.at(lovedSource.filepath());
+    EXPECT_EQ(ownedTrack.playCount(), 9);
+    EXPECT_FLOAT_EQ(ownedTrack.rating(), 0.4F);
+    EXPECT_FALSE(context().library.canUpdateTrackStats(ownedTrack, Track::Stat::Rating));
+    EXPECT_FALSE(context().library.canUpdateTrackStats(ownedTrack, Track::Stat::Playcount));
+    ASSERT_TRUE(context().library.canUpdateTrackStats(ownedTrack, Track::Stat::Loved));
+
+    Track ownedLocal{ownedTrack};
+    ownedLocal.setLoved(true);
+    context().library.updateTrackStats(ownedLocal, Track::Stat::Loved);
+    Track lovedLocal{lovedTrack};
+    lovedLocal.setRating(0.6F);
+    lovedLocal.setPlayCount(5);
+    lovedLocal.setFirstPlayed(40);
+    lovedLocal.setLastPlayed(900);
+    context().library.updateTrackStats(lovedLocal, Track::Stat::Rating | Track::Stat::Playcount);
+    ASSERT_TRUE(waitForCondition([&]() {
+        const Track resident = context().library.trackForId(lovedTrack.id());
+        return context().library.trackForId(ownedTrack.id()).isLoved() && resident.playCount() == 5
+            && resident.rating() == 0.6F;
+    }));
+
+    // The play time setters only move earlier or later, so the later snapshot uses new source tracks.
+    ownedSource = externalTrack(u"test-source://owned/item"_s, u"Owned"_s);
+    ownedSource.setRating(0.8F);
+    ownedSource.setPlayCount(3);
+    ownedSource.setFirstPlayed(200);
+    ownedSource.setLastPlayed(300);
+    ownedSource.setLoved(false);
+    lovedSource = externalTrack(u"test-source://loved/item"_s, u"Loved"_s);
+    lovedSource.setRating(0.2F);
+    lovedSource.setPlayCount(1);
+    lovedSource.setFirstPlayed(10);
+    lovedSource.setLastPlayed(20);
+    lovedSource.setLoved(false);
+    context().library.applyExternalLibrarySnapshot(*owned, {ownedSource}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    context().library.applyExternalLibrarySnapshot(*loved, {lovedSource}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+
+    const auto expectOwned = [](const Track& track) {
+        EXPECT_FLOAT_EQ(track.rating(), 0.8F);
+        EXPECT_EQ(track.playCount(), 3);
+        EXPECT_EQ(track.firstPlayed(), 200U);
+        EXPECT_EQ(track.lastPlayed(), 300U);
+        EXPECT_TRUE(track.isLoved());
+    };
+    const auto expectLoved = [](const Track& track) {
+        EXPECT_FLOAT_EQ(track.rating(), 0.6F);
+        EXPECT_EQ(track.playCount(), 5);
+        EXPECT_EQ(track.firstPlayed(), 40U);
+        EXPECT_EQ(track.lastPlayed(), 900U);
+        EXPECT_FALSE(track.isLoved());
+    };
+
+    expectOwned(context().library.trackForId(ownedTrack.id()));
+    expectLoved(context().library.trackForId(lovedTrack.id()));
+
+    TrackDatabase database;
+    database.initialise(DbConnectionProvider{context().dbPool});
+    Track ownedStored{ownedTrack};
+    ASSERT_TRUE(database.reloadTrack(ownedStored));
+    expectOwned(ownedStored);
+    Track lovedStored{lovedTrack};
+    ASSERT_TRUE(database.reloadTrack(lovedStored));
+    expectLoved(lovedStored);
+
+    UnifiedMusicLibrary reloaded{&context().libraryManager, context().dbPool,   context().playlistLoader,
+                                 context().audioLoader,     context().remoteIo, &context().settings};
+    QSignalSpy loaded{&reloaded, &MusicLibrary::tracksLoaded};
+    reloaded.loadAllTracks();
+    waitForSignal(loaded);
+    expectOwned(reloaded.trackForId(ownedTrack.id()));
+    expectLoved(reloaded.trackForId(lovedTrack.id()));
+    EXPECT_FALSE(reloaded.canUpdateTrackStats(reloaded.trackForId(ownedTrack.id()), Track::Stat::Playcount));
+}
+
 TEST_F(UnifiedMusicLibraryTest, ExternalActivationRetainsTrackIdentityAndPersistsIndependentlyOfFilters)
 {
     const auto library = context().library.addExternalLibrary(u"test-source://account"_s, u"Account"_s);
@@ -1948,6 +2051,103 @@ TEST_F(UnifiedMusicLibraryTest, ExternalActivationRetainsTrackIdentityAndPersist
     reloaded.setExternalLibraryActive(*library, true);
     ASSERT_EQ(reloaded.activeLibraryTracks().size(), 1U);
     EXPECT_EQ(reloaded.activeLibraryTracks().front().id(), track.id());
+}
+
+TEST_F(UnifiedMusicLibraryTest, RemovedExternalLibraryClearsOnlyItsCommittedSourceState)
+{
+    const QString removedPath{u"test-source://removed"_s};
+    const QString keptPath{u"test-source://kept"_s};
+    const auto removed = context().library.addExternalLibrary(removedPath, u"Removed"_s);
+    const auto kept    = context().library.addExternalLibrary(keptPath, u"Kept"_s);
+    ASSERT_TRUE(removed);
+    ASSERT_TRUE(kept);
+    context().library.setExternalLibraryReadOnlyStats(*removed, Track::Stat::Loved);
+    context().library.setExternalLibraryReadOnlyStats(*kept, Track::Stat::Loved);
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(*removed, {externalTrack(removedPath + u"/item"_s, u"Removed"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    context().library.applyExternalLibrarySnapshot(*kept, {externalTrack(keptPath + u"/item"_s, u"Kept"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const auto byPath        = tracksByPath(context().library.libraryTracks());
+    const Track removedTrack = byPath.at(removedPath + u"/item"_s);
+    const Track keptTrack    = byPath.at(keptPath + u"/item"_s);
+    ASSERT_EQ(removedTrack.readOnlyStats(), Track::Stats{Track::Stat::Loved});
+    // A playlist entry keeps the removed track as a detached record.
+    ASSERT_NE(context().playlistHandler.createPlaylist(u"Local"_s, {removedTrack}), nullptr);
+    context().playlistHandler.savePlaylists();
+    context().library.setExternalLibraryActive(*removed, false);
+    context().library.setExternalLibraryActive(*kept, false);
+
+    const QString removedInactiveKey{u"ExternalLibraries/Inactive/"_s + removedPath};
+    const QString removedStatsKey{u"ExternalLibraries/ReadOnlyStats/"_s + removedPath};
+    const QString keptInactiveKey{u"ExternalLibraries/Inactive/"_s + keptPath};
+    const QString keptStatsKey{u"ExternalLibraries/ReadOnlyStats/"_s + keptPath};
+    ASSERT_TRUE(context().settings.fileContains(removedInactiveKey));
+    ASSERT_TRUE(context().settings.fileContains(removedStatsKey));
+
+    const DbConnectionProvider dbProvider{context().dbPool};
+    DbQuery failDelete{dbProvider.db(), u"CREATE TRIGGER FailLibraries BEFORE DELETE ON Libraries "
+                                        u"BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;"_s};
+    ASSERT_TRUE(failDelete.exec()) << failDelete.lastError().text().toStdString();
+    EXPECT_FALSE(context().libraryManager.removeLibrary(removed->id));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(context().settings.fileContains(removedInactiveKey));
+    EXPECT_TRUE(context().settings.fileContains(removedStatsKey));
+    EXPECT_FALSE(context().library.isTrackSourceActive(context().library.trackForId(removedTrack.id())));
+    EXPECT_EQ(context().library.trackForId(removedTrack.id()).readOnlyStats(), Track::Stats{Track::Stat::Loved});
+    DbQuery dropDelete{dbProvider.db(), u"DROP TRIGGER FailLibraries;"_s};
+    ASSERT_TRUE(dropDelete.exec()) << dropDelete.lastError().text().toStdString();
+
+    TrackDatabase database;
+    database.initialise(DbConnectionProvider{context().dbPool});
+    QSignalSpy activation{&context().library, &MusicLibrary::sourceActivationChanged};
+    ASSERT_TRUE(context().libraryManager.removeLibrary(removed->id));
+    EXPECT_FALSE(context().settings.fileContains(removedInactiveKey));
+    EXPECT_FALSE(context().settings.fileContains(removedStatsKey));
+    EXPECT_EQ(activation.size(), 1);
+    EXPECT_TRUE(context().settings.fileContains(keptInactiveKey));
+    EXPECT_TRUE(context().settings.fileContains(keptStatsKey));
+    Track stored{removedTrack};
+    ASSERT_TRUE(waitForCondition(
+        [&]() { return database.reloadTrack(stored) && stored.readOnlyStats() == Track::Stat::None; }));
+    EXPECT_EQ(stored.libraryId(), -1);
+    const auto expectDetached = [&removedTrack, &keptTrack](const MusicLibrary& library) {
+        const Track detached = library.trackForId(removedTrack.id());
+        EXPECT_EQ(detached.filepath(), removedTrack.filepath());
+        EXPECT_EQ(detached.libraryId(), -1);
+        EXPECT_EQ(detached.readOnlyStats(), Track::Stats{Track::Stat::None});
+        EXPECT_TRUE(library.isTrackSourceActive(detached));
+        EXPECT_TRUE(library.canUpdateTrackStats(detached, Track::Stat::Loved));
+        const Track other = library.trackForId(keptTrack.id());
+        EXPECT_EQ(other.readOnlyStats(), Track::Stats{Track::Stat::Loved});
+        EXPECT_FALSE(library.isTrackSourceActive(other));
+        EXPECT_FALSE(library.canUpdateTrackStats(other, Track::Stat::Loved));
+    };
+    expectDetached(context().library);
+    UnifiedMusicLibrary reloaded{&context().libraryManager, context().dbPool,   context().playlistLoader,
+                                 context().audioLoader,     context().remoteIo, &context().settings};
+    QSignalSpy loaded{&reloaded, &MusicLibrary::tracksLoaded};
+    reloaded.loadAllTracks();
+    waitForSignal(loaded);
+    expectDetached(reloaded);
+
+    const auto readded = context().library.addExternalLibrary(removedPath, u"Removed"_s);
+    ASSERT_TRUE(readded);
+    EXPECT_FALSE(context().settings.fileContains(u"ExternalLibraries/Inactive/"_s + readded->path));
+    EXPECT_FALSE(context().settings.fileContains(u"ExternalLibraries/ReadOnlyStats/"_s + readded->path));
+    context().library.applyExternalLibrarySnapshot(*readded, {externalTrack(removedPath + u"/item"_s, u"Removed"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    TrackList readdedTracks;
+    std::ranges::copy_if(context().library.libraryTracks(), std::back_inserter(readdedTracks),
+                         [&readded](const Track& track) { return track.libraryId() == readded->id; });
+    ASSERT_EQ(readdedTracks.size(), 1U);
+    EXPECT_EQ(readdedTracks.front().filepath(), removedTrack.filepath());
+    EXPECT_EQ(readdedTracks.front().readOnlyStats(), Track::Stats{Track::Stat::None});
+    EXPECT_TRUE(context().library.isTrackSourceActive(readdedTracks.front()));
+    EXPECT_TRUE(context().library.canUpdateTrackStats(readdedTracks.front(), Track::Stat::Loved));
 }
 
 TEST_F(UnifiedMusicLibraryTest, ExternalPlaylistOwnershipSurvivesUnlockAndSourceVisibilityChanges)
@@ -2040,6 +2240,9 @@ TEST_F(UnifiedMusicLibraryTest, ExternalPlaylistWriteFailuresKeepStoredPlaylists
         library->path, u"server-playlist"_s, {}, u"Server playlist"_s, PlaylistTrack::fromTracks({track}, {}));
     ASSERT_NE(mirror, nullptr);
     const UId mirrorId             = mirror->id();
+    // Loading the shared library would repopulate the live playlists from storage.
+    UnifiedMusicLibrary storedLibrary{&context().libraryManager, context().dbPool,   context().playlistLoader,
+                                      context().audioLoader,     context().remoteIo, &context().settings};
     const int mirrorDbId           = mirror->dbId();
     const size_t playlistCount     = context().playlistHandler.playlists().size();
     const auto sourcePlaylistDbIds = [&library](const PlaylistHandler& handler) {
@@ -2060,14 +2263,24 @@ TEST_F(UnifiedMusicLibraryTest, ExternalPlaylistWriteFailuresKeepStoredPlaylists
                                                 u"BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;"_s};
     ASSERT_TRUE(failDelete.exec()) << failDelete.lastError().text().toStdString();
 
+    QSignalSpy added{&context().playlistHandler, &PlaylistHandler::playlistAdded};
+    QSignalSpy patched{&context().playlistHandler, &PlaylistHandler::tracksPatched};
+    QSignalSpy changed{&context().playlistHandler, &PlaylistHandler::tracksChanged};
     EXPECT_EQ(context().playlistHandler.applyExternalPlaylist(library->path, u"new-playlist"_s, {}, u"New playlist"_s,
                                                               PlaylistTrack::fromTracks({track}, {})),
               nullptr);
     EXPECT_EQ(context().playlistHandler.playlists().size(), playlistCount);
+    EXPECT_TRUE(added.isEmpty());
+    EXPECT_TRUE(patched.isEmpty());
+    EXPECT_TRUE(changed.isEmpty());
+    QSignalSpy renamed{&context().playlistHandler, &PlaylistHandler::playlistRenamed};
     EXPECT_EQ(context().playlistHandler.applyExternalPlaylist(library->path, u"server-playlist"_s, {}, u"Renamed"_s,
                                                               PlaylistTrack::fromTracks({track, track}, {})),
               nullptr);
-    EXPECT_EQ(mirror->name(), u"Server playlist"_s);
+    EXPECT_EQ(mirror->name(), u"Renamed"_s);
+    EXPECT_EQ(mirror->trackCount(), 2);
+    EXPECT_TRUE(mirror->modified());
+    EXPECT_EQ(renamed.size(), 1);
     EXPECT_FALSE(context().playlistHandler.removeExternalPlaylist(library->path, mirrorId));
     EXPECT_EQ(context().playlistHandler.playlistById(mirrorId), mirror);
 
@@ -2076,9 +2289,9 @@ TEST_F(UnifiedMusicLibraryTest, ExternalPlaylistWriteFailuresKeepStoredPlaylists
     Fooyin::DbQuery dropDelete{dbProvider.db(), u"DROP TRIGGER FailPlaylists;"_s};
     ASSERT_TRUE(dropDelete.exec()) << dropDelete.lastError().text().toStdString();
     {
-        PlaylistHandler restored{context().dbPool, context().audioLoader, &context().library, &context().settings};
-        QSignalSpy loaded{&context().library, &MusicLibrary::tracksLoaded};
-        context().library.loadAllTracks();
+        PlaylistHandler restored{context().dbPool, context().audioLoader, &storedLibrary, &context().settings};
+        QSignalSpy loaded{&storedLibrary, &MusicLibrary::tracksLoaded};
+        storedLibrary.loadAllTracks();
         waitForSignal(loaded);
         EXPECT_EQ(sourcePlaylistDbIds(restored), std::vector<int>{mirrorDbId});
         ASSERT_NE(restored.playlistByDbId(mirrorDbId), nullptr);
@@ -2091,9 +2304,9 @@ TEST_F(UnifiedMusicLibraryTest, ExternalPlaylistWriteFailuresKeepStoredPlaylists
               mirror);
     EXPECT_EQ(mirror->name(), u"Renamed"_s);
     {
-        PlaylistHandler restored{context().dbPool, context().audioLoader, &context().library, &context().settings};
-        QSignalSpy loaded{&context().library, &MusicLibrary::tracksLoaded};
-        context().library.loadAllTracks();
+        PlaylistHandler restored{context().dbPool, context().audioLoader, &storedLibrary, &context().settings};
+        QSignalSpy loaded{&storedLibrary, &MusicLibrary::tracksLoaded};
+        storedLibrary.loadAllTracks();
         waitForSignal(loaded);
         EXPECT_EQ(sourcePlaylistDbIds(restored), std::vector<int>{mirrorDbId});
         ASSERT_NE(restored.playlistByDbId(mirrorDbId), nullptr);
@@ -2124,6 +2337,9 @@ TEST_F(UnifiedMusicLibraryTest, ExternalPlaylistOuterCommitFailureKeepsChangesFo
         {{.track = tracks.at(0), .playlistId = {}, .entryId = firstEntryId, .indexInPlaylist = 0}});
     ASSERT_NE(mirror, nullptr);
     const int mirrorDbId = mirror->dbId();
+    // Loading the shared library would repopulate the live playlists from storage.
+    UnifiedMusicLibrary storedLibrary{&context().libraryManager, context().dbPool,   context().playlistLoader,
+                                      context().audioLoader,     context().remoteIo, &context().settings};
     const PlaylistTrackList updatedTracks{
         {.track = tracks.at(1), .playlistId = {}, .entryId = secondEntryId, .indexInPlaylist = 0},
         {.track = tracks.at(0), .playlistId = {}, .entryId = firstEntryId, .indexInPlaylist = 1}};
@@ -2142,13 +2358,36 @@ TEST_F(UnifiedMusicLibraryTest, ExternalPlaylistOuterCommitFailureKeepsChangesFo
     ASSERT_TRUE(execute(u"CREATE TRIGGER FailCommit AFTER UPDATE ON Playlists "
                         u"BEGIN INSERT INTO CommitFault VALUES (1); END;"_s));
 
+    const auto sourcePlaylistCount = [](const PlaylistHandler& handler) {
+        return std::ranges::count_if(handler.playlists(), [](const Playlist* playlist) {
+            return playlist->sourcePlaylistId() == u"server-playlist"_s;
+        });
+    };
+    const auto expectVisibleTracks = [&](const Playlist* playlist) {
+        const PlaylistTrackList visibleTracks = playlist->playlistTracks();
+        ASSERT_EQ(visibleTracks.size(), 2U);
+        EXPECT_EQ(visibleTracks.at(0).track.id(), tracks.at(1).id());
+        EXPECT_EQ(visibleTracks.at(0).entryId, secondEntryId);
+        EXPECT_EQ(visibleTracks.at(1).track.id(), tracks.at(0).id());
+        EXPECT_EQ(visibleTracks.at(1).entryId, firstEntryId);
+    };
+
+    QSignalSpy patched{&context().playlistHandler, &PlaylistHandler::tracksPatched};
+    QSignalSpy changed{&context().playlistHandler, &PlaylistHandler::tracksChanged};
     EXPECT_EQ(context().playlistHandler.applyExternalPlaylist(library->path, u"server-playlist"_s, {},
                                                               u"Server playlist"_s, updatedTracks),
               nullptr);
+    expectVisibleTracks(mirror);
+    EXPECT_EQ(patched.size() + changed.size(), 1);
+    EXPECT_TRUE(mirror->modified());
+    EXPECT_TRUE(mirror->tracksModified());
+    EXPECT_EQ(mirror->sourcePlaylistId(), u"server-playlist"_s);
+    EXPECT_EQ(sourcePlaylistCount(context().playlistHandler), 1);
+    const QString pendingEntries = mirror->extraProperties().value(u"core/source-playlist-entries"_s);
     {
-        PlaylistHandler restored{context().dbPool, context().audioLoader, &context().library, &context().settings};
-        QSignalSpy loaded{&context().library, &MusicLibrary::tracksLoaded};
-        context().library.loadAllTracks();
+        PlaylistHandler restored{context().dbPool, context().audioLoader, &storedLibrary, &context().settings};
+        QSignalSpy loaded{&storedLibrary, &MusicLibrary::tracksLoaded};
+        storedLibrary.loadAllTracks();
         waitForSignal(loaded);
         ASSERT_NE(restored.playlistByDbId(mirrorDbId), nullptr);
         EXPECT_EQ(restored.playlistByDbId(mirrorDbId)->trackCount(), 1);
@@ -2157,13 +2396,27 @@ TEST_F(UnifiedMusicLibraryTest, ExternalPlaylistOuterCommitFailureKeepsChangesFo
     ASSERT_TRUE(execute(u"DROP TRIGGER FailCommit;"_s));
     ASSERT_TRUE(execute(u"DROP TABLE CommitFault;"_s));
     ASSERT_TRUE(execute(u"DROP TABLE CommitFaultParent;"_s));
+    context().playlistHandler.savePlaylists();
+    {
+        PlaylistHandler restored{context().dbPool, context().audioLoader, &storedLibrary, &context().settings};
+        QSignalSpy loaded{&storedLibrary, &MusicLibrary::tracksLoaded};
+        storedLibrary.loadAllTracks();
+        waitForSignal(loaded);
+        const Playlist* stored = restored.playlistByDbId(mirrorDbId);
+        ASSERT_NE(stored, nullptr);
+        expectVisibleTracks(stored);
+        EXPECT_EQ(stored->extraProperties().value(u"core/source-playlist-entries"_s), pendingEntries);
+        EXPECT_EQ(sourcePlaylistCount(restored), 1);
+    }
+
     EXPECT_EQ(context().playlistHandler.applyExternalPlaylist(library->path, u"server-playlist"_s, {},
                                                               u"Server playlist"_s, updatedTracks),
               mirror);
+    EXPECT_EQ(sourcePlaylistCount(context().playlistHandler), 1);
     {
-        PlaylistHandler restored{context().dbPool, context().audioLoader, &context().library, &context().settings};
-        QSignalSpy loaded{&context().library, &MusicLibrary::tracksLoaded};
-        context().library.loadAllTracks();
+        PlaylistHandler restored{context().dbPool, context().audioLoader, &storedLibrary, &context().settings};
+        QSignalSpy loaded{&storedLibrary, &MusicLibrary::tracksLoaded};
+        storedLibrary.loadAllTracks();
         waitForSignal(loaded);
         const Playlist* stored = restored.playlistByDbId(mirrorDbId);
         ASSERT_NE(stored, nullptr);

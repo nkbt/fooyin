@@ -912,10 +912,13 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitRemoveLibrary(LibraryInfo librar
 
     TrackList removedTracks;
     TrackList updatedTracks;
+    TrackList sourceStatsTracks;
     TrackList remainingTracks;
 
     remainingTracks.reserve(m_tracks.size());
     removedTracks.reserve(tracksRemoved.size());
+
+    const bool isExternal = isExternalLibrary(library);
 
     for(auto& track : m_tracks) {
         const bool isInRemovedLibrary = track.libraryId() == library.id;
@@ -925,8 +928,17 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitRemoveLibrary(LibraryInfo librar
             continue;
         }
 
+        const bool hasSourceStats
+            = isExternal && track.externalLibraryPath() == library.path && track.readOnlyStats() != Track::Stat::None;
+
         if(isInRemovedLibrary) {
             track.setLibraryId(-1);
+        }
+        if(hasSourceStats) {
+            track.setReadOnlyStats(Track::Stat::None);
+            sourceStatsTracks.push_back(track);
+        }
+        if(isInRemovedLibrary || hasSourceStats) {
             updatedTracks.push_back(track);
         }
 
@@ -943,7 +955,18 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitRemoveLibrary(LibraryInfo librar
     }
 
     setupLibraryWatchers();
-    co_return;
+
+    if(sourceStatsTracks.empty()) {
+        co_return;
+    }
+
+    const QPointer lifetime{m_self};
+    const auto clearFuture = m_threadHandler.clearReadOnlyStats(sourceStatsTracks);
+    co_await qCoro(QFuture<bool>{clearFuture}).waitForFinished();
+
+    if(lifetime && (clearFuture.resultCount() == 0 || !clearFuture.result())) {
+        qCWarning(LIBRARY) << "Statistics owned by removed external library" << library.id << "remain stored";
+    }
 }
 
 bool UnifiedMusicLibraryPrivate::isRegisteredExternalLibrary(const LibraryInfo& library) const
@@ -1014,20 +1037,22 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalLibrarySnapshot(Lib
             continue;
         }
 
+        // The database keeps the stored values of statistics that the source does not own.
         const Track& existingTrack = existing->second;
         track.setId(existingTrack.id());
         track.setAddedTime(existingTrack.addedTime());
-        track.setFirstPlayed(existingTrack.firstPlayed());
-        track.setLastPlayed(existingTrack.lastPlayed());
-        track.setPlayCount(existingTrack.playCount());
-        track.setRating(existingTrack.rating());
-        if(!sourceStats.testFlag(Track::Stat::Loved)) {
-            track.setLoved(existingTrack.isLoved());
-        }
         track.generateHash();
 
+        const bool lovedChanged
+            = sourceStats.testFlag(Track::Stat::Loved) && existingTrack.isLoved() != track.isLoved();
+        const bool ratingChanged
+            = sourceStats.testFlag(Track::Stat::Rating) && existingTrack.rating() != track.rating();
+        const bool playsChanged
+            = sourceStats.testFlag(Track::Stat::Playcount)
+           && (existingTrack.playCount() != track.playCount() || existingTrack.firstPlayed() != track.firstPlayed()
+               || existingTrack.lastPlayed() != track.lastPlayed());
         if(!existingTrack.isEnabled() || Database::trackBindings(existingTrack) != Database::trackBindings(track)
-           || existingTrack.isLoved() != track.isLoved()) {
+           || lovedChanged || ratingChanged || playsChanged) {
             updatedTracks.push_back(track);
         }
     }
@@ -1153,6 +1178,15 @@ UnifiedMusicLibrary::UnifiedMusicLibrary(LibraryManager* libraryManager, DbConne
                      [this](const LibraryInfo& library) { p->m_threadHandler.libraryRemoved(library.id); });
     QObject::connect(p->m_libraryManager, &LibraryManager::libraryRemoved, this,
                      [this](const LibraryInfo& library, const std::set<int>& tracksRemoved) {
+                         if(isExternalLibrary(library)) {
+                             const QString inactiveKey = u"ExternalLibraries/Inactive/"_s + library.path;
+                             const bool wasInactive    = p->m_settings->fileValue(inactiveKey).toBool();
+                             p->m_settings->fileRemove(u"ExternalLibraries/ReadOnlyStats/"_s + library.path);
+                             p->m_settings->fileRemove(inactiveKey);
+                             if(wasInactive) {
+                                 Q_EMIT sourceActivationChanged();
+                             }
+                         }
                          p->removeLibrary(library, tracksRemoved);
                      });
 

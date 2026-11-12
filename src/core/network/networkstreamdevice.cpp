@@ -654,6 +654,9 @@ NetworkStreamDevice::NetworkStreamDevice(std::shared_ptr<QNetworkAccessManager> 
                                          QObject* parent)
     : NetworkStreamDevice{std::move(network), request.url(), maxBufferedBytes, parent}
 {
+    // Credentialed responses stay out of the shared disk cache so that no other account or later session reads them.
+    request.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
+    request.setAttribute(QNetworkRequest::CacheSaveControlAttribute, false);
     m_state->request        = std::move(request);
     m_state->redirectScope  = std::move(redirectScope);
     m_state->sourceLifetime = sourceLifetime;

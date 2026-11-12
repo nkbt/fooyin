@@ -1373,6 +1373,21 @@ LibraryThreadHandler::storeExternalLibrarySnapshot(const LibraryInfo& library, c
     return future;
 }
 
+QFuture<bool> LibraryThreadHandler::clearReadOnlyStats(const TrackList& tracks)
+{
+    auto promise = std::make_shared<QPromise<bool>>();
+    auto future  = promise->future();
+    promise->start();
+
+    QMetaObject::invokeMethod(&p->m_trackDatabaseManager,
+                              [this, promise, tracks, workerToken = p->m_trackDatabaseManager.prepareWork()]() {
+                                  promise->addResult(p->m_trackDatabaseManager.clearReadOnlyStats(tracks, workerToken));
+                                  promise->finish();
+                              });
+
+    return future;
+}
+
 void LibraryThreadHandler::libraryRemoved(int id)
 {
     if(p->m_scanRequests.empty()) {

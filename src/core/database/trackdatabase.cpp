@@ -210,7 +210,7 @@ bool TrackDatabase::storeExternalSnapshot(const LibraryInfo& library, TrackList&
 
     for(auto& track : addedTracks) {
         if(track.id() >= 0 || track.libraryId() != library.id || idForTrack(track) >= 0
-           || !storeTrack(track, sourceStats)) {
+           || !storeTrack(track, sourceStats) || !reloadTrack(track)) {
             return false;
         }
     }
@@ -234,17 +234,35 @@ bool TrackDatabase::storeExternalSnapshot(const LibraryInfo& library, TrackList&
             return false;
         }
 
-        StoredTrackStats stats;
         const Track::Stats importedStats = track.libraryId() == library.id ? sourceStats : Track::Stat::None;
-        if(!updateTrackData(track) || !insertOrUpdateStats(track, &stats, importedStats)) {
+        // A reload applies the stored statistics exactly; the play time setters only move earlier or later.
+        // A detached track already holds its stored statistics and keeps its disabled state.
+        if(!updateTrackData(track) || !insertOrUpdateStats(track, nullptr, importedStats, importedStats)
+           || (track.libraryId() == library.id && !reloadTrack(track))) {
             return false;
         }
-        track.setAddedTime(stats.added);
-        track.setFirstPlayed(stats.firstPlayed);
-        track.setLastPlayed(stats.lastPlayed);
-        track.setPlayCount(stats.playCount);
-        track.setRating(stats.rating);
-        track.setLoved(stats.loved);
+    }
+
+    return transaction.commit();
+}
+
+bool TrackDatabase::clearReadOnlyStats(const TrackList& tracks)
+{
+    DbTransaction transaction{db()};
+
+    if(!transaction) {
+        return false;
+    }
+
+    for(const Track& track : tracks) {
+        Track canonical{track};
+        if(!reloadTrack(canonical)) {
+            return false;
+        }
+        canonical.setReadOnlyStats(Track::Stat::None);
+        if(!updateTrackData(canonical)) {
+            return false;
+        }
     }
 
     return transaction.commit();
@@ -274,7 +292,7 @@ bool TrackDatabase::storeTrack(Track& track, Track::Stats sourceStats)
     }
 
     StoredTrackStats stats;
-    if(!insertOrUpdateStats(track, &stats, importedStats)) {
+    if(!insertOrUpdateStats(track, &stats, importedStats, sourceStats)) {
         return false;
     }
 
@@ -550,7 +568,7 @@ bool TrackDatabase::updateTrackStats(Track& track, Track::Stats updatedStats)
         }
     }
     StoredTrackStats stats;
-    if(!insertOrUpdateStats(track, &stats, updatedStats)) {
+    if(!insertOrUpdateStats(track, &stats, updatedStats, Track::Stat::None)) {
         return false;
     }
 
@@ -802,8 +820,8 @@ std::optional<TrackDatabase::StoredTrackStats> TrackDatabase::existingTrackStats
     };
 }
 
-bool TrackDatabase::insertOrUpdateStats(const Track& track, StoredTrackStats* mergedStats,
-                                        Track::Stats updatedStats) const
+bool TrackDatabase::insertOrUpdateStats(const Track& track, StoredTrackStats* mergedStats, Track::Stats updatedStats,
+                                        Track::Stats sourceStats) const
 {
     if(track.hash().isEmpty()) {
         qCWarning(TRK_DB) << "Cannot insert/update track stats (Hash empty)";
@@ -831,7 +849,15 @@ bool TrackDatabase::insertOrUpdateStats(const Track& track, StoredTrackStats* me
         dbNeedsUpdate = true;
     }
 
-    if(updatedStats.testFlag(Track::Stat::Playcount)) {
+    if(sourceStats.testFlag(Track::Stat::Playcount)) {
+        if(trackFirstPlayed != firstPlayed || trackLastPlayed != lastPlayed || trackPlayCount != playCount) {
+            firstPlayed   = trackFirstPlayed;
+            lastPlayed    = trackLastPlayed;
+            playCount     = trackPlayCount;
+            dbNeedsUpdate = true;
+        }
+    }
+    else if(updatedStats.testFlag(Track::Stat::Playcount)) {
         if((trackFirstPlayed != firstPlayed)
            && (firstPlayed == 0 || (trackFirstPlayed > 0 && trackFirstPlayed < firstPlayed))) {
             firstPlayed   = trackFirstPlayed;

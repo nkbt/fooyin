@@ -129,7 +129,11 @@ public:
 
     /** Returns the playlists owned by the source at @p sourceLibraryPath, including hidden ones. */
     [[nodiscard]] PlaylistList externalPlaylists(const QString& sourceLibraryPath) const;
-    /** Stores or adopts an owned source playlist atomically; returns nullptr on failure. */
+    /*!
+     * Stores or adopts an owned source playlist in one database transaction and returns it.
+     * Returns nullptr on failure and leaves the database unchanged. A new playlist is then discarded, while the tracks
+     * and name applied to an existing playlist stay visible as unsaved changes until a later apply or playlist save.
+     */
     Playlist* applyExternalPlaylist(const QString& sourceLibraryPath, const QString& sourcePlaylistId,
                                     const UId& adoptedId, const QString& name, const PlaylistTrackList& playlistTracks);
     /** Returns false when the source playlist with @p id remains stored. */

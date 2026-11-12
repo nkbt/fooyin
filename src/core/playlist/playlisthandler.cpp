@@ -1455,7 +1455,13 @@ Playlist* PlaylistHandler::applyExternalPlaylist(const QString& sourceLibraryPat
     }
     playlist->setExtraProperty(u"core/source-playlist-entries"_s,
                                QString::fromUtf8(QJsonDocument{entries}.toJson(QJsonDocument::Compact)));
-    p->replacePlaylistTracks(playlist, sourcePlaylistTracks);
+    if(added) {
+        // A new playlist is not published before its commit, so it emits no track changes.
+        playlist->replaceTracks(p->ensureDatabaseTracks(playlist, sourcePlaylistTracks));
+    }
+    else {
+        p->replacePlaylistTracks(playlist, sourcePlaylistTracks);
+    }
     const QString previousName{playlist->name()};
     if(playlist->name() != name) {
         QStringList playlistNames;
@@ -1468,17 +1474,21 @@ Playlist* PlaylistHandler::applyExternalPlaylist(const QString& sourceLibraryPat
             Utils::findUniqueString(name, playlistNames, [](const QString& playlistName) { return playlistName; }));
     }
     p->updateIndices();
+    const bool renamed = playlist->name() != previousName;
     if(!p->m_playlistConnector.savePlaylist(*playlist) || !transaction.commit()) {
+        qCWarning(PL_HANDLER) << "Failed to store source playlist; its changes remain unsaved";
         // An unsaved source playlist ID would hide the record from legacy adoption on the next attempt.
         playlist->setExtraProperty(u"core/source-playlist-id"_s, previousSourcePlaylistId);
         // The nested save clears these flags even when the outer commit then fails.
         playlist->setModified(true);
         playlist->setTracksModified(true);
-        playlist->setName(previousName);
         discardAdded();
+        if(!added && renamed) {
+            Q_EMIT playlistRenamed(playlist);
+        }
         return nullptr;
     }
-    if(playlist->name() != previousName) {
+    if(renamed) {
         Q_EMIT playlistRenamed(playlist);
     }
     if(added && isPlaylistVisible(playlist->id())) {

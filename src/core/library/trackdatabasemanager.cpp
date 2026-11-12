@@ -164,6 +164,23 @@ TrackDatabaseManager::storeExternalLibrarySnapshot(const LibraryInfo& library, T
     return std::pair{addedTracks, updatedTracks};
 }
 
+bool TrackDatabaseManager::clearReadOnlyStats(const TrackList& tracks, std::stop_token workerToken)
+{
+    if(!startWork(workerToken)) {
+        return false;
+    }
+
+    const bool cleared = m_trackDatabase.clearReadOnlyStats(tracks);
+
+    setState(Idle);
+
+    if(!cleared) {
+        qCWarning(TRK_DBMAN) << "Failed to clear statistics owned by a removed external library";
+    }
+
+    return cleared;
+}
+
 void TrackDatabaseManager::checkTrackAvailability(const TrackList& tracks, std::stop_token workerToken)
 {
     if(!startWork(workerToken)) {
