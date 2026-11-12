@@ -58,7 +58,11 @@ bool AccountDatabase::load(const QString& account, std::optional<QString>& value
 
 bool AccountDatabase::save(const QString& account, const QString& value) const
 {
-    DbQuery query{db(), u"INSERT OR REPLACE INTO Settings (Name, Value) VALUES (:name, :value)"_s};
+    QSqlQuery query{db()};
+    if(!query.prepare(u"INSERT OR REPLACE INTO Settings (Name, Value) VALUES (:name, :value)"_s)) {
+        qCWarning(ACCOUNT_DB) << "Unable to prepare account save:" << account;
+        return false;
+    }
 
     query.bindValue(u":name"_s, QString{u"Accounts/"_s + account});
     query.bindValue(u":value"_s, value);

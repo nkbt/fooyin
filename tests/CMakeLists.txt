@@ -54,6 +54,7 @@ if(WIN32)
 endif()
 
 fooyin_add_test(test_audioconverter core/engine/audioconvertertest.cpp)
+fooyin_add_test(test_accountstore core/accountstoretest.cpp)
 fooyin_add_test(test_audioclock core/engine/audioclocktest.cpp)
 fooyin_add_test(test_conversionpathresolver core/engine/conversion/conversionpathresolvertest.cpp)
 fooyin_add_test(test_conversionrunner core/engine/conversion/conversionrunnertest.cpp)
