@@ -164,6 +164,26 @@ TrackDatabaseManager::storeExternalLibrarySnapshot(const LibraryInfo& library, T
     return std::pair{addedTracks, updatedTracks};
 }
 
+std::optional<TrackList> TrackDatabaseManager::storeExternalTrackStats(const LibraryInfo& library, TrackList tracks,
+                                                                       Track::Stats sourceStats,
+                                                                       std::stop_token workerToken)
+{
+    if(!startWork(workerToken)) {
+        return {};
+    }
+
+    const bool stored = m_trackDatabase.storeExternalTrackStats(library, tracks, sourceStats);
+
+    setState(Idle);
+
+    if(!stored) {
+        qCWarning(TRK_DBMAN) << "Failed to store external library statistics";
+        return {};
+    }
+
+    return tracks;
+}
+
 void TrackDatabaseManager::checkTrackAvailability(const TrackList& tracks, std::stop_token workerToken)
 {
     if(!startWork(workerToken)) {

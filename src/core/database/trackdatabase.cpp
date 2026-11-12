@@ -246,6 +246,42 @@ bool TrackDatabase::storeExternalSnapshot(const LibraryInfo& library, TrackList&
     return transaction.commit();
 }
 
+bool TrackDatabase::storeExternalTrackStats(const LibraryInfo& library, TrackList& tracks, Track::Stats sourceStats)
+{
+    DbTransaction transaction{db()};
+
+    if(!transaction) {
+        return false;
+    }
+
+    static const QString statement = u"SELECT 1 FROM Libraries WHERE LibraryID = :libraryId AND Path = :path;"_s;
+
+    DbQuery libraryQuery{db(), statement};
+    libraryQuery.bindValue(u":libraryId"_s, library.id);
+    libraryQuery.bindValue(u":path"_s, library.path);
+
+    if(!libraryQuery.exec() || !libraryQuery.next()) {
+        return false;
+    }
+
+    static const QString ownerStatement = u"SELECT LibraryID FROM Tracks WHERE TrackID = :trackId;"_s;
+
+    for(auto& track : tracks) {
+        DbQuery ownerQuery{db(), ownerStatement};
+        ownerQuery.bindValue(u":trackId"_s, track.id());
+
+        if(!ownerQuery.exec() || !ownerQuery.next() || ownerQuery.value(0).toInt() != library.id) {
+            return false;
+        }
+
+        if(!insertOrUpdateStats(track, nullptr, sourceStats, sourceStats) || !reloadTrack(track)) {
+            return false;
+        }
+    }
+
+    return transaction.commit();
+}
+
 bool TrackDatabase::storeTrack(Track& track, Track::Stats sourceStats)
 {
     if(!insertTrack(track, true)) {

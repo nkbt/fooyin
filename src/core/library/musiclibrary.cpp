@@ -127,9 +127,27 @@ bool MusicLibrary::canUpdateTrackStats(const Track& track, Track::Stats stats) c
     return !((canonical.isValid() ? canonical.readOnlyStats() : track.readOnlyStats()) & stats);
 }
 
+bool MusicLibrary::canEditTrackStats(const Track& track, Track::Stats stats) const
+{
+    return canUpdateTrackStats(track, stats);
+}
+
+void MusicLibrary::editTrackStats(const TrackList& tracks, Track::Stats stats)
+{
+    updateTrackStats(tracks, stats);
+}
+
 void MusicLibrary::setExternalLibraryActive(const LibraryInfo& /*library*/, bool /*active*/) { }
 
 void MusicLibrary::setExternalLibraryReadOnlyStats(const LibraryInfo& /*library*/, Track::Stats /*stats*/) { }
+
+void MusicLibrary::setExternalLibraryStatsHandler(const LibraryInfo& /*library*/, Track::Stats /*stats*/,
+                                                  QObject* /*handler*/)
+{ }
+
+void MusicLibrary::applyExternalTrackStats(const LibraryInfo& /*library*/, const TrackList& /*tracks*/,
+                                           Track::Stats /*stats*/)
+{ }
 
 bool MusicLibrary::hasActiveLibraryFilters() const
 {

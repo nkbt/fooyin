@@ -90,6 +90,9 @@ public:
                                                                                          const TrackList& addedTracks,
                                                                                          const TrackList& updatedTracks,
                                                                                          Track::Stats sourceStats);
+    /** Stores source-owned statistics on the database thread. Resolves to the stored tracks, or nothing on failure. */
+    QFuture<std::optional<TrackList>> storeExternalTrackStats(const LibraryInfo& library, const TrackList& tracks,
+                                                              Track::Stats sourceStats);
 
 Q_SIGNALS:
     void progressChanged(const Fooyin::ScanProgress& progress);

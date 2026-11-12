@@ -70,8 +70,9 @@ QString normaliseBulkEditorValue(QString value)
 } // namespace
 
 namespace Fooyin {
-PlaylistView::PlaylistView(QWidget* parent)
+PlaylistView::PlaylistView(MusicLibrary* library, QWidget* parent)
     : ExpandedTreeView{parent}
+    , m_library{library}
     , m_playlistLoaded{false}
     , m_stickyHeaders{false}
     , m_stickySubheaders{false}
@@ -826,10 +827,8 @@ void PlaylistView::editTrackStat(const QModelIndex& index, const QVariant& value
     }
 
     for(const QModelIndex& statIndex : std::as_const(indexes)) {
-        if(statIndex.data(PlaylistItem::PersistentItemData)
-               .value<PlaylistTrack>()
-               .track.readOnlyStats()
-               .testFlag(stat)) {
+        if(!m_library->canEditTrackStats(statIndex.data(PlaylistItem::PersistentItemData).value<PlaylistTrack>().track,
+                                         stat)) {
             return;
         }
     }

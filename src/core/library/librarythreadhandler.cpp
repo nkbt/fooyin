@@ -1373,6 +1373,24 @@ LibraryThreadHandler::storeExternalLibrarySnapshot(const LibraryInfo& library, c
     return future;
 }
 
+QFuture<std::optional<TrackList>> LibraryThreadHandler::storeExternalTrackStats(const LibraryInfo& library,
+                                                                                const TrackList& tracks,
+                                                                                Track::Stats sourceStats)
+{
+    auto promise = std::make_shared<QPromise<std::optional<TrackList>>>();
+    auto future  = promise->future();
+    promise->start();
+
+    QMetaObject::invokeMethod(&p->m_trackDatabaseManager, [this, promise, library, tracks, sourceStats,
+                                                           workerToken = p->m_trackDatabaseManager.prepareWork()]() {
+        promise->addResult(
+            p->m_trackDatabaseManager.storeExternalTrackStats(library, tracks, sourceStats, workerToken));
+        promise->finish();
+    });
+
+    return future;
+}
+
 void LibraryThreadHandler::libraryRemoved(int id)
 {
     if(p->m_scanRequests.empty()) {

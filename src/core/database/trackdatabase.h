@@ -50,6 +50,11 @@ public:
      */
     bool storeExternalSnapshot(const LibraryInfo& library, TrackList& addedTracks, TrackList& updatedTracks,
                                Track::Stats sourceStats);
+    /*!
+     * Replaces the stored @p sourceStats of @p tracks in one transaction while @p library is still registered.
+     * Fails without changes if a track does not belong to @p library. The tracks are reloaded as stored.
+     */
+    bool storeExternalTrackStats(const LibraryInfo& library, TrackList& tracks, Track::Stats sourceStats);
     bool updateTracks(TrackList& tracks);
     std::expected<void, QString> writeScanBatch(TrackList& tracksToStore, TrackList& tracksToUpdate);
 

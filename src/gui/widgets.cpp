@@ -331,10 +331,10 @@ void Widgets::registerWidgets()
     provider->registerWidget(
         u"LoveControl"_s,
         [this]() {
-            auto* control = new LoveControl(m_core->playerController(), m_settings, m_window);
+            auto* control = new LoveControl(m_core->playerController(), m_core->library(), m_settings, m_window);
             auto* library = m_core->library();
             QObject::connect(control, &LoveControl::trackLoved, library,
-                             [library](const Track& track) { library->updateTrackStats(track, Track::Stat::Loved); });
+                             [library](const Track& track) { library->editTrackStats({track}, Track::Stat::Loved); });
             return control;
         },
         tr("Love Control"), {.supportsToolbar = true, .toolbarAreas = Qt::AllToolBarAreas});

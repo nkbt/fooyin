@@ -47,7 +47,7 @@ class PlaylistView : public ExpandedTreeView
     Q_OBJECT
 
 public:
-    explicit PlaylistView(QWidget* parent = nullptr);
+    explicit PlaylistView(MusicLibrary* library, QWidget* parent = nullptr);
 
     void setInlineEditDelay(int delayMs);
     void setLoadingText(const QString& text);
@@ -147,6 +147,7 @@ private:
 
     void drawBackground(QPainter& painter);
 
+    MusicLibrary* m_library;
     QString m_emptyText;
     QString m_loadingText;
     bool m_playlistLoaded;

@@ -40,6 +40,7 @@ class QToolButton;
 namespace Fooyin {
 class CoverProvider;
 class CoverRepository;
+class MusicLibrary;
 class BackgroundImageSource;
 class WidgetBackground;
 class TrackSelectionController;
@@ -55,7 +56,8 @@ class FilterExpansionWidget : public QWidget
     Q_OBJECT
 
 public:
-    FilterExpansionWidget(TrackSelectionController* selection, CoverRepository* coverRepo, QWidget* parent = nullptr);
+    FilterExpansionWidget(TrackSelectionController* selection, CoverRepository* coverRepo, MusicLibrary* library,
+                          QWidget* parent = nullptr);
     ~FilterExpansionWidget() override;
 
     void submit(ExpansionRequest request);

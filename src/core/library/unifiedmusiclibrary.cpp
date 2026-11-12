@@ -45,6 +45,7 @@
 
 #include <deque>
 #include <functional>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <unordered_map>
@@ -236,6 +237,11 @@ private:
     std::unordered_map<TrackPathKey, size_t, TrackPathKeyHash> m_byPathWithoutId;
 };
 
+struct ExternalStatsHandler
+{
+    Track::Stats stats;
+    QPointer<QObject> handler;
+};
 } // namespace
 
 class UnifiedMusicLibraryPrivate
@@ -295,6 +301,8 @@ public:
     QCoro::Task<> commitRemoveLibrary(LibraryInfo library, std::set<int> tracksRemoved);
     [[nodiscard]] bool isRegisteredExternalLibrary(const LibraryInfo& library) const;
     QCoro::Task<> commitApplyExternalLibrarySnapshot(LibraryInfo library, TrackList snapshotTracks, QUuid operation);
+    QCoro::Task<> commitApplyExternalTrackStats(LibraryInfo library, TrackList reportedTracks, Track::Stats stats);
+    [[nodiscard]] Track::Stats handledStats(const Track& canonical) const;
     void removeLibrary(const LibraryInfo& library, const std::set<int>& tracksRemoved);
     void libraryStatusChanged(const LibraryInfo& library) const;
 
@@ -314,6 +322,7 @@ public:
     std::optional<QCoro::Task<>> m_activeCommitTask;
     std::unordered_map<int, ScanSummaryCounts> m_scanSummaries;
     std::unordered_set<int> m_failedScans;
+    std::unordered_map<int, ExternalStatsHandler> m_externalStatsHandlers;
 };
 
 UnifiedMusicLibraryPrivate::UnifiedMusicLibraryPrivate(UnifiedMusicLibrary* self, LibraryManager* libraryManager,
@@ -1134,6 +1143,72 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalLibrarySnapshot(Lib
     Q_EMIT m_self->externalLibrarySnapshotFinished(operation, library.id, true);
 }
 
+QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalTrackStats(LibraryInfo library, TrackList reportedTracks,
+                                                                        Track::Stats stats)
+{
+    const QPointer lifetime{m_self};
+
+    if(!isRegisteredExternalLibrary(library)) {
+        qCWarning(LIBRARY) << "Rejected statistics for unknown external library" << library.id;
+        co_return;
+    }
+
+    const Track::Stats sourceStats
+        = stats
+        & Track::Stats::fromInt(m_settings->fileValue(u"ExternalLibraries/ReadOnlyStats/"_s + library.path).toInt());
+    if(sourceStats == Track::Stat::None || reportedTracks.empty()) {
+        co_return;
+    }
+
+    const TrackLookup lookup{m_tracks};
+
+    TrackList updatedTracks;
+    updatedTracks.reserve(reportedTracks.size());
+
+    for(const Track& reportedTrack : reportedTracks) {
+        const auto index = lookup.findById(reportedTrack);
+        if(!index || m_tracks.at(*index).libraryId() != library.id
+           || m_tracks.at(*index).externalLibraryPath() != library.path) {
+            qCWarning(LIBRARY) << "Rejected external library statistics for a track of another library";
+            co_return;
+        }
+
+        Track updatedTrack{m_tracks.at(*index)};
+        mergeTrackStats(updatedTrack, reportedTrack, sourceStats);
+        updatedTracks.push_back(updatedTrack);
+    }
+
+    const auto storeFuture = m_threadHandler.storeExternalTrackStats(library, updatedTracks, sourceStats);
+    co_await qCoro(QFuture<void>{storeFuture}).waitForFinished();
+
+    if(!lifetime || storeFuture.resultCount() == 0 || !storeFuture.result()) {
+        co_return;
+    }
+
+    if(!isRegisteredExternalLibrary(library)) {
+        qCWarning(LIBRARY) << "Discarded statistics for removed external library" << library.id;
+        co_return;
+    }
+
+    co_await commitUpdateTracksStats(*storeFuture.result(), sourceStats);
+}
+
+Track::Stats UnifiedMusicLibraryPrivate::handledStats(const Track& canonical) const
+{
+    const auto handler = m_externalStatsHandlers.find(canonical.libraryId());
+    if(handler == m_externalStatsHandlers.cend() || handler->second.handler.isNull()) {
+        return Track::Stat::None;
+    }
+
+    const auto library = m_libraryManager->libraryInfo(canonical.libraryId());
+    if(!library || library->path != canonical.externalLibraryPath() || !isRegisteredExternalLibrary(*library)
+       || !m_self->isTrackSourceActive(canonical)) {
+        return Track::Stat::None;
+    }
+
+    return handler->second.stats & canonical.readOnlyStats();
+}
+
 void UnifiedMusicLibraryPrivate::removeLibrary(const LibraryInfo& library, const std::set<int>& tracksRemoved)
 {
     enqueueCommit([this, library, tracksRemoved]() mutable {
@@ -1165,6 +1240,9 @@ UnifiedMusicLibrary::UnifiedMusicLibrary(LibraryManager* libraryManager, DbConne
     QObject::connect(p->m_libraryManager, &LibraryManager::libraryRemoved, this,
                      [this](const LibraryInfo& library, const std::set<int>& tracksRemoved) {
                          if(isExternalLibrary(library)) {
+                             if(p->m_externalStatsHandlers.erase(library.id) > 0) {
+                                 Q_EMIT externalLibraryStatsHandlerChanged();
+                             }
                              const QString inactiveKey = u"ExternalLibraries/Inactive/"_s + library.path;
                              const bool wasInactive    = p->m_settings->fileValue(inactiveKey).toBool();
                              p->m_settings->fileRemove(u"ExternalLibraries/ReadOnlyStats/"_s + library.path);
@@ -1324,6 +1402,50 @@ void UnifiedMusicLibrary::setExternalLibraryActive(const LibraryInfo& library, b
     Q_EMIT sourceActivationChanged();
 }
 
+void UnifiedMusicLibrary::setExternalLibraryStatsHandler(const LibraryInfo& library, Track::Stats stats,
+                                                         QObject* handler)
+{
+    if(!p->isRegisteredExternalLibrary(library)) {
+        return;
+    }
+
+    if(stats == Track::Stat::None || !handler) {
+        if(p->m_externalStatsHandlers.erase(library.id) > 0) {
+            Q_EMIT externalLibraryStatsHandlerChanged();
+        }
+        return;
+    }
+
+    p->m_externalStatsHandlers.insert_or_assign(library.id, ExternalStatsHandler{.stats = stats, .handler = handler});
+    QObject::connect(handler, &QObject::destroyed, this, [this, libraryId = library.id]() {
+        const auto current = p->m_externalStatsHandlers.find(libraryId);
+        if(current != p->m_externalStatsHandlers.end() && current->second.handler.isNull()) {
+            p->m_externalStatsHandlers.erase(current);
+            Q_EMIT externalLibraryStatsHandlerChanged();
+        }
+    });
+    Q_EMIT externalLibraryStatsHandlerChanged();
+}
+
+bool UnifiedMusicLibrary::canEditTrackStats(const Track& track, Track::Stats stats) const
+{
+    const Track canonical = trackForId(track.id());
+    if(!canonical.isValid()) {
+        return canUpdateTrackStats(track, stats);
+    }
+
+    const Track::Stats sourceStats = stats & canonical.readOnlyStats();
+    return (sourceStats & ~p->handledStats(canonical)) == Track::Stat::None;
+}
+
+void UnifiedMusicLibrary::applyExternalTrackStats(const LibraryInfo& library, const TrackList& tracks,
+                                                  Track::Stats stats)
+{
+    p->enqueueCommit([this, library, tracks, stats]() mutable {
+        return p->commitApplyExternalTrackStats(std::move(library), std::move(tracks), stats);
+    });
+}
+
 bool UnifiedMusicLibrary::isTrackSourceActive(const Track& track) const
 {
     return track.externalLibraryPath().isEmpty()
@@ -1457,6 +1579,28 @@ void UnifiedMusicLibrary::updateTrackStats(const TrackList& tracks, Track::Stats
             updatedTrack.generateHash();
             p->m_threadHandler.saveUpdatedTrackStats({updatedTrack}, allowedStats);
         }
+    }
+}
+
+void UnifiedMusicLibrary::editTrackStats(const TrackList& tracks, Track::Stats stats)
+{
+    updateTrackStats(tracks, stats);
+
+    std::map<int, TrackList> requestedTracks;
+
+    for(const Track& track : tracks) {
+        const Track canonical             = trackForId(track.id());
+        const Track::Stats requestedStats = stats & p->handledStats(canonical);
+        if(requestedStats != Track::Stat::None) {
+            Track requestedTrack{canonical};
+            mergeTrackStats(requestedTrack, track, requestedStats);
+            requestedTracks[canonical.libraryId()].push_back(requestedTrack);
+        }
+    }
+
+    for(const auto& [libraryId, libraryTracks] : requestedTracks) {
+        Q_EMIT externalTrackStatsChangeRequested(*p->m_libraryManager->libraryInfo(libraryId), libraryTracks,
+                                                 stats & p->handledStats(libraryTracks.front()));
     }
 }
 

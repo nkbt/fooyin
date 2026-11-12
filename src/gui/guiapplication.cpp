@@ -1477,7 +1477,7 @@ void GuiApplication::setupPlaybackStatisticsMenu()
         }
 
         if(std::ranges::any_of(tracks, [this](const Track& track) {
-               return !m_core->library()->canUpdateTrackStats(track, Track::Stat::Loved);
+               return !m_core->library()->canEditTrackStats(track, Track::Stat::Loved);
            })) {
             return;
         }
@@ -1486,7 +1486,7 @@ void GuiApplication::setupPlaybackStatisticsMenu()
         for(auto& track : tracks) {
             track.setLoved(newLoved);
         }
-        m_core->library()->updateTrackStats(tracks, Track::Stat::Loved);
+        m_core->library()->editTrackStats(tracks, Track::Stat::Loved);
     };
 
     auto registerAction = [this, updateLoved](const QString& text, const QString& description, const char* icon,
@@ -1504,7 +1504,7 @@ void GuiApplication::setupPlaybackStatisticsMenu()
             this, TrackContextMenuArea::Track, Constants::Menus::Context::TrackSelection, id, action->text(),
             [this, action](QMenu* menu, const TrackSelection& selection) {
                 const bool readOnly = std::ranges::any_of(selection.tracks, [this](const Track& track) {
-                    return !m_core->library()->canUpdateTrackStats(track, Track::Stat::Loved);
+                    return !m_core->library()->canEditTrackStats(track, Track::Stat::Loved);
                 });
                 action->setEnabled(!selection.tracks.empty() && !readOnly);
                 action->setToolTip(readOnly ? tr("Loved status is managed by the library source") : action->text());

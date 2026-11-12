@@ -1919,7 +1919,7 @@ PlaylistModel::editableTrackContext(const QModelIndex& index) const
 bool PlaylistModel::canEditTrack(const Track& track, const EditableTrackContext& context) const
 {
     if(context.ratingField || context.loveField) {
-        return !track.readOnlyStats().testFlag(context.loveField ? Track::Stat::Loved : Track::Stat::Rating);
+        return m_library->canEditTrackStats(track, context.loveField ? Track::Stat::Loved : Track::Stat::Rating);
     }
 
     if(track.isInArchive() || track.hasCue()) {
@@ -2534,7 +2534,7 @@ QVariant PlaylistModel::trackData(PlaylistItem* item, const QModelIndex& index, 
     switch(role) {
         case Qt::ToolTipRole: {
             if(const auto context = editableTrackContextForColumn(column);
-               context && context->loveField && track.readOnlyStats().testFlag(Track::Stat::Loved)) {
+               context && context->loveField && !m_library->canEditTrackStats(track, Track::Stat::Loved)) {
                 return tr("Loved status is managed by the library source");
             }
             if(!singleColumnMode) {

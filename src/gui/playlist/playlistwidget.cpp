@@ -1130,7 +1130,7 @@ PlaylistWidget::PlaylistWidget(ActionManager* actionManager, PlaylistInteractor*
     , m_model{new PlaylistModel(m_playlistInteractor, core->audioLoader().get(), coverProvider, m_settings,
                                 styleProvider, core->scriptContextService(), this)}
     , m_delgate{new PlaylistDelegate(this)}
-    , m_playlistView{new PlaylistView(this)}
+    , m_playlistView{new PlaylistView(m_library, this)}
     , m_header{new AutoHeaderView(Qt::Horizontal, this)}
     , m_pendingHeaderRestore{false}
     , m_configurablePreview{false}
@@ -2111,14 +2111,14 @@ void PlaylistWidget::setupConnections()
 
     // clang-format off
     QObject::connect(m_playlistView, &PlaylistView::tracksRated, m_library,
-                     [this](const TrackList& tracks) { m_library->updateTrackStats(tracks, Track::Stat::Rating); });
+                     [this](const TrackList& tracks) { m_library->editTrackStats(tracks, Track::Stat::Rating); });
     QObject::connect(m_playlistView, &PlaylistView::tracksLoved, this,
-                     [this](const TrackList& tracks) { m_library->updateTrackStats(tracks, Track::Stat::Loved); });
+                     [this](const TrackList& tracks) { m_library->editTrackStats(tracks, Track::Stat::Loved); });
     QObject::connect(m_model, &PlaylistModel::metadataWriteRequested, this, &PlaylistWidget::handleMetadataWriteRequested);
     QObject::connect(m_model, &PlaylistModel::tracksRated, m_library,
-                     [this](const TrackList& tracks) { m_library->updateTrackStats(tracks, Track::Stat::Rating); });
+                     [this](const TrackList& tracks) { m_library->editTrackStats(tracks, Track::Stat::Rating); });
     QObject::connect(m_model, &PlaylistModel::tracksLoved, m_library,
-                     [this](const TrackList& tracks) { m_library->updateTrackStats(tracks, Track::Stat::Loved); });
+                     [this](const TrackList& tracks) { m_library->editTrackStats(tracks, Track::Stat::Loved); });
     QObject::connect(m_playlistView, &PlaylistView::bulkWriteRequested, this, &PlaylistWidget::handleBulkWriteRequested);
     QObject::connect(m_playlistController, &PlaylistController::currentPlaylistTracksUpdated, m_model, [this](const std::vector<int>& indexes) { m_model->refreshTracks(indexes); });
     QObject::connect(m_playlistController, &PlaylistController::currentPlaylistUpdated, this, &PlaylistWidget::resetModelThrottled);

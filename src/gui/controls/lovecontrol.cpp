@@ -19,6 +19,7 @@
 
 #include "lovecontrol.h"
 
+#include <core/library/musiclibrary.h>
 #include <core/player/playercontroller.h>
 #include <gui/guisettings.h>
 #include <gui/guiutils.h>
@@ -194,9 +195,11 @@ void LoveControlEditor::toggleLoved()
     Q_EMIT loveToggled(m_value.loved());
 }
 
-LoveControl::LoveControl(PlayerController* playerController, SettingsManager* settings, QWidget* parent)
+LoveControl::LoveControl(PlayerController* playerController, MusicLibrary* library, SettingsManager* settings,
+                         QWidget* parent)
     : FyWidget{parent}
     , m_playerController{playerController}
+    , m_library{library}
     , m_settings{settings}
     , m_editor{new LoveControlEditor(this)}
 {
@@ -208,6 +211,10 @@ LoveControl::LoveControl(PlayerController* playerController, SettingsManager* se
     QObject::connect(m_playerController, &PlayerController::currentTrackChanged, this, &LoveControl::updateTrack);
     QObject::connect(m_playerController, &PlayerController::currentTrackUpdated, this, &LoveControl::updateTrack);
     QObject::connect(m_playerController, &PlayerController::playStateChanged, this,
+                     [this]() { updateTrack(m_playerController->currentTrack()); });
+    QObject::connect(m_library, &MusicLibrary::externalLibraryStatsHandlerChanged, this,
+                     [this]() { updateTrack(m_playerController->currentTrack()); });
+    QObject::connect(m_library, &MusicLibrary::sourceActivationChanged, this,
                      [this]() { updateTrack(m_playerController->currentTrack()); });
 
     const auto updateToolButtonOptions = [this](int value) {
@@ -242,7 +249,7 @@ void LoveControl::updateTrack(const Track& track)
                     appearance.unlovedHeartColour, appearance.loveSymbols};
     love.setSymbolFont(appearance.loveSymbolFont);
     m_editor->setValue(love);
-    const bool readOnly = track.readOnlyStats().testFlag(Track::Stat::Loved);
+    const bool readOnly = !m_library->canEditTrackStats(track, Track::Stat::Loved);
     m_editor->setToolTip(readOnly ? tr("Loved status is managed by the library source") : tr("Change loved status"));
     m_editor->setInteractive(!readOnly && track.isValid()
                              && m_playerController->playState() != Player::PlayState::Stopped);
@@ -257,7 +264,7 @@ void LoveControl::updateAppearance()
 void LoveControl::changeLoved(bool loved)
 {
     Track track = m_playerController->currentTrack();
-    if(!track.isValid() || track.readOnlyStats().testFlag(Track::Stat::Loved)
+    if(!track.isValid() || !m_library->canEditTrackStats(track, Track::Stat::Loved)
        || m_playerController->playState() == Player::PlayState::Stopped) {
         return;
     }

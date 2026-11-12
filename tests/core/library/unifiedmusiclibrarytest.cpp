@@ -72,7 +72,9 @@
 #include <memory>
 #include <mutex>
 #include <ranges>
+#include <tuple>
 #include <unordered_map>
+#include <vector>
 
 using namespace Qt::StringLiterals;
 
@@ -2845,4 +2847,192 @@ TEST_F(UnifiedMusicLibraryTest, SourceActivationInvalidatesVisibleCatalogBeforeH
     QObject::disconnect(connection);
 }
 
+TEST_F(UnifiedMusicLibraryTest, ExternalStatsEditRequestsOnlyTheActiveHandlerOfTheOwningLibrary)
+{
+    const auto library = context().library.addExternalLibrary(u"test-source://favourites"_s, u"External"_s);
+    const auto foreign = context().library.addExternalLibrary(u"test-source://foreign"_s, u"Foreign"_s);
+    ASSERT_TRUE(library);
+    ASSERT_TRUE(foreign);
+    context().library.setExternalLibraryReadOnlyStats(*library, Track::Stat::Loved);
+    context().library.setExternalLibraryReadOnlyStats(*foreign, Track::Stat::Loved);
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(
+        *library, {externalTrack(u"test-source://favourites/item"_s, u"Item"_s)}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    context().library.applyExternalLibrarySnapshot(
+        *foreign, {externalTrack(u"test-source://foreign/item"_s, u"Foreign"_s)}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const auto byPath        = tracksByPath(context().library.libraryTracks());
+    const Track track        = byPath.at(u"test-source://favourites/item"_s);
+    const Track foreignTrack = byPath.at(u"test-source://foreign/item"_s);
+
+    std::vector<std::tuple<LibraryInfo, TrackList, Track::Stats>> requests;
+    QObject::connect(&context().library, &MusicLibrary::externalTrackStatsChangeRequested, &context().library,
+                     [&requests](const LibraryInfo& requestLibrary, const TrackList& tracks, Track::Stats stats) {
+                         requests.emplace_back(requestLibrary, tracks, stats);
+                     });
+    QSignalSpy handlerChanged{&context().library, &MusicLibrary::externalLibraryStatsHandlerChanged};
+
+    Track loved{track};
+    loved.setLoved(true);
+    Track foreignLoved{foreignTrack};
+    foreignLoved.setLoved(true);
+
+    EXPECT_FALSE(context().library.canEditTrackStats(track, Track::Stat::Loved));
+    EXPECT_TRUE(context().library.canEditTrackStats(track, Track::Stat::Rating));
+    context().library.editTrackStats({loved}, Track::Stat::Loved);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(requests.empty());
+
+    auto handler = std::make_unique<QObject>();
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::Loved | Track::Stat::Rating, handler.get());
+    EXPECT_EQ(handlerChanged.size(), 1);
+    EXPECT_TRUE(context().library.canEditTrackStats(track, Track::Stat::Loved));
+    EXPECT_TRUE(context().library.canEditTrackStats(track, Track::Stat::Loved | Track::Stat::Rating));
+    EXPECT_FALSE(context().library.canEditTrackStats(foreignTrack, Track::Stat::Loved));
+
+    context().library.updateTrackStats({loved}, Track::Stat::Loved);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(requests.empty());
+
+    loved.setRating(0.6F);
+    context().library.editTrackStats({loved, foreignLoved}, Track::Stat::Loved | Track::Stat::Rating);
+    ASSERT_EQ(requests.size(), 1U);
+    const auto& [requestLibrary, requestTracks, requestStats] = requests.front();
+    EXPECT_EQ(requestLibrary.id, library->id);
+    EXPECT_EQ(requestLibrary.path, library->path);
+    EXPECT_EQ(requestStats, Track::Stats{Track::Stat::Loved});
+    ASSERT_EQ(requestTracks.size(), 1U);
+    EXPECT_EQ(requestTracks.front().id(), track.id());
+    EXPECT_TRUE(requestTracks.front().isLoved());
+    EXPECT_FLOAT_EQ(requestTracks.front().rating(), track.rating());
+    ASSERT_TRUE(waitForCondition([&]() { return context().library.trackForId(track.id()).rating() == 0.6F; }));
+    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
+    EXPECT_FALSE(context().library.trackForId(foreignTrack.id()).isLoved());
+    TrackDatabase database;
+    database.initialise(DbConnectionProvider{context().dbPool});
+    Track stored{track};
+    ASSERT_TRUE(database.reloadTrack(stored));
+    EXPECT_FALSE(stored.isLoved());
+    EXPECT_FLOAT_EQ(stored.rating(), 0.6F);
+    requests.clear();
+
+    context().library.setExternalLibraryActive(*library, false);
+    EXPECT_FALSE(context().library.canEditTrackStats(track, Track::Stat::Loved));
+    context().library.editTrackStats({loved}, Track::Stat::Loved);
+    EXPECT_TRUE(requests.empty());
+    context().library.setExternalLibraryActive(*library, true);
+    EXPECT_TRUE(context().library.canEditTrackStats(track, Track::Stat::Loved));
+
+    handler.reset();
+    EXPECT_EQ(handlerChanged.size(), 2);
+    EXPECT_FALSE(context().library.canEditTrackStats(track, Track::Stat::Loved));
+    context().library.editTrackStats({loved}, Track::Stat::Loved);
+    EXPECT_TRUE(requests.empty());
+
+    auto replacement = std::make_unique<QObject>();
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::Loved, replacement.get());
+    EXPECT_EQ(handlerChanged.size(), 3);
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::None, replacement.get());
+    EXPECT_EQ(handlerChanged.size(), 4);
+    EXPECT_FALSE(context().library.canEditTrackStats(track, Track::Stat::Loved));
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::Loved, replacement.get());
+    EXPECT_EQ(handlerChanged.size(), 5);
+
+    ASSERT_TRUE(context().libraryManager.removeLibrary(library->id));
+    EXPECT_EQ(handlerChanged.size(), 6);
+    ASSERT_TRUE(waitForCondition([&]() { return context().library.trackForId(track.id()).libraryId() == -1; }));
+    EXPECT_TRUE(context().library.canEditTrackStats(context().library.trackForId(track.id()), Track::Stat::Loved));
+    context().library.editTrackStats({loved}, Track::Stat::Loved);
+    EXPECT_TRUE(requests.empty());
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::Loved, replacement.get());
+    EXPECT_EQ(handlerChanged.size(), 6);
+    replacement.reset();
+    EXPECT_EQ(handlerChanged.size(), 6);
+}
+
+TEST_F(UnifiedMusicLibraryTest, ExternalStatsPublicationReplacesOnlySourceStatsInCommitOrder)
+{
+    const auto library = context().library.addExternalLibrary(u"test-source://published"_s, u"External"_s);
+    const auto foreign = context().library.addExternalLibrary(u"test-source://other"_s, u"Foreign"_s);
+    ASSERT_TRUE(library);
+    ASSERT_TRUE(foreign);
+    context().library.setExternalLibraryReadOnlyStats(*library, Track::Stat::Loved);
+    context().library.setExternalLibraryReadOnlyStats(*foreign, Track::Stat::Loved);
+    Track source = externalTrack(u"test-source://published/item"_s, u"Item"_s);
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(*library, {source}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    context().library.applyExternalLibrarySnapshot(*foreign, {externalTrack(u"test-source://other/item"_s, u"Other"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const auto byPath        = tracksByPath(context().library.libraryTracks());
+    const Track track        = byPath.at(u"test-source://published/item"_s);
+    const Track foreignTrack = byPath.at(u"test-source://other/item"_s);
+    ASSERT_NE(context().playlistHandler.createPlaylist(u"Local"_s, {track}), nullptr);
+
+    Track rated{track};
+    rated.setRating(0.4F);
+    context().library.updateTrackStats(rated, Track::Stat::Rating);
+    ASSERT_TRUE(waitForCondition([&]() { return context().library.trackForId(track.id()).rating() == 0.4F; }));
+
+    QSignalSpy requested{&context().library, &MusicLibrary::externalTrackStatsChangeRequested};
+    QSignalSpy statsChanged{&context().library, &MusicLibrary::tracksStatsChanged};
+    Track reported{track};
+    reported.setLoved(true);
+    reported.setRating(0.9F);
+    reported.setTitle(u"Changed"_s);
+    context().library.applyExternalTrackStats(*library, {reported}, Track::Stat::Loved | Track::Stat::Rating);
+    ASSERT_TRUE(waitForCondition([&]() { return context().library.trackForId(track.id()).isLoved(); }));
+    const Track published = context().library.trackForId(track.id());
+    EXPECT_FLOAT_EQ(published.rating(), 0.4F);
+    EXPECT_EQ(published.title(), u"Item"_s);
+    EXPECT_EQ(published.libraryId(), library->id);
+    EXPECT_EQ(published.readOnlyStats(), Track::Stats{Track::Stat::Loved});
+    ASSERT_EQ(statsChanged.size(), 1);
+    EXPECT_EQ(statsChanged.front().at(1).value<Track::Stats>(), Track::Stats{Track::Stat::Loved});
+    EXPECT_FALSE(context().library.trackForId(foreignTrack.id()).isLoved());
+    EXPECT_TRUE(requested.empty());
+
+    Track unloved{track};
+    unloved.setLoved(false);
+    context().library.applyExternalTrackStats(*library, {unloved}, Track::Stat::Loved);
+    context().library.applyExternalTrackStats(*library, {reported}, Track::Stat::Loved);
+    context().library.applyExternalTrackStats(*library, {unloved}, Track::Stat::Loved);
+    ASSERT_TRUE(waitForCondition([&]() { return statsChanged.size() == 4; }));
+    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
+
+    context().library.applyExternalTrackStats(*library, {reported}, Track::Stat::Loved);
+    source.setLoved(false);
+    context().library.applyExternalLibrarySnapshot(*library, {source}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
+    context().library.applyExternalTrackStats(*library, {reported}, Track::Stat::Loved);
+    ASSERT_TRUE(waitForCondition([&]() { return context().library.trackForId(track.id()).isLoved(); }));
+
+    Track foreignLoved{foreignTrack};
+    foreignLoved.setLoved(true);
+    LibraryInfo unregistered{*library};
+    unregistered.id = library->id + 100;
+    LibraryInfo moved{*library};
+    moved.path = u"test-source://other"_s;
+    context().library.applyExternalTrackStats(unregistered, {unloved}, Track::Stat::Loved);
+    context().library.applyExternalTrackStats(moved, {unloved}, Track::Stat::Loved);
+    context().library.applyExternalTrackStats(*foreign, {unloved}, Track::Stat::Loved);
+    context().library.applyExternalTrackStats(*library, {unloved, foreignLoved}, Track::Stat::Loved);
+    context().library.applyExternalTrackStats(*foreign, {foreignLoved}, Track::Stat::Loved);
+    ASSERT_TRUE(waitForCondition([&]() { return context().library.trackForId(foreignTrack.id()).isLoved(); }));
+    EXPECT_TRUE(context().library.trackForId(track.id()).isLoved());
+    EXPECT_TRUE(requested.empty());
+
+    UnifiedMusicLibrary reloaded{&context().libraryManager, context().dbPool,   context().playlistLoader,
+                                 context().audioLoader,     context().remoteIo, &context().settings};
+    QSignalSpy loaded{&reloaded, &MusicLibrary::tracksLoaded};
+    reloaded.loadAllTracks();
+    waitForSignal(loaded);
+    EXPECT_TRUE(reloaded.trackForId(track.id()).isLoved());
+    EXPECT_FLOAT_EQ(reloaded.trackForId(track.id()).rating(), 0.4F);
+    EXPECT_EQ(reloaded.trackForId(track.id()).libraryId(), library->id);
+    EXPECT_TRUE(reloaded.trackForId(foreignTrack.id()).isLoved());
+}
 } // namespace Fooyin::Testing
