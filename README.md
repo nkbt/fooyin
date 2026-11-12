@@ -154,7 +154,7 @@ open "$HOME/Applications/fooyin.app"
 
 The app uses a local ad-hoc signature. Sign again after changing a plugin or a bundled library. A local signature does not provide Apple notarisation.
 
-The [Jellyfin profile migration instructions](https://github.com/nkbt/fooyin-jellyfin#move-a-profile-to-macos) list the native macOS profile directories. Copy `fooyin.db` with the settings because it contains the host accounts used by Jellyfin and the scrobbler. Select `SDL2 (coreaudio)` with the default device when replacing a Linux audio output.
+The [Jellyfin profile migration instructions](https://github.com/nkbt/fooyin-jellyfin#move-a-profile-to-macos) list the native macOS profile directories. Copy `fooyin.db` with the settings because it contains the host accounts used by Jellyfin and the scrobbler. Enable the SDL2 plugin if the source profile disables it. Select `SDL2 (coreaudio)` with the default device when replacing a Linux audio output.
 
 fooyin is developed and supported on Linux and Windows. Build configurations and CI workflows are also maintained for macOS.
 
