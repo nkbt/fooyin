@@ -21,8 +21,10 @@
 
 #include "core/coresettings.h"
 #include "tageditoreditor.h"
+#include "tageditorstats.h"
 #include "tagfilldialog.h"
 
+#include <core/library/musiclibrary.h>
 #include <gui/widgets/autoheaderview.h>
 #include <utils/settings/settingsmanager.h>
 
@@ -50,8 +52,9 @@ bool allDbOnlyTracks(const TrackList& tracks)
 } // namespace
 
 TagEditorPropertiesTab::TagEditorPropertiesTab(ActionManager* actionManager, TagEditorFieldRegistry* registry,
-                                               SettingsManager* settings, QWidget* parent)
+                                               MusicLibrary* library, SettingsManager* settings, QWidget* parent)
     : PropertiesTabWidget{parent}
+    , m_library{library}
     , m_settings{settings}
     , m_session{nullptr}
     , m_activeTrackIndex{-1}
@@ -71,6 +74,10 @@ TagEditorPropertiesTab::TagEditorPropertiesTab(ActionManager* actionManager, Tag
                      &TagEditorPropertiesTab::pendingChangesStateChanged);
     QObject::connect(m_editor, &TagEditorEditor::autoFillValuesRequested, this,
                      &TagEditorPropertiesTab::autoFillValues);
+    QObject::connect(m_library, &MusicLibrary::externalLibraryStatsHandlerChanged, this,
+                     &TagEditorPropertiesTab::updateLovedEditable);
+    QObject::connect(m_library, &MusicLibrary::sourceActivationChanged, this,
+                     &TagEditorPropertiesTab::updateLovedEditable);
 
     restoreState();
 }
@@ -132,6 +139,13 @@ void TagEditorPropertiesTab::apply()
     }
 
     if(m_pendingTracks.empty()) {
+        return;
+    }
+
+    if(!canSaveTrackStats(m_library, m_pendingTracks, m_pendingStats)) {
+        QMessageBox::warning(
+            this, tr("Unable to Save Changes"),
+            tr("The source of these tracks can’t change Loved at the moment. The changes were not saved."));
         return;
     }
 
@@ -236,9 +250,9 @@ TrackList TagEditorPropertiesTab::commitCurrentScopeEdits()
     }
     mergeTracks(m_pendingTracks, changedTracks);
 
+    m_pendingStats |= stats;
     if(statOnly) {
         m_hasPendingStatChanges = true;
-        m_pendingStats |= stats;
     }
     else {
         m_hasPendingMetadataChanges = true;
@@ -268,7 +282,13 @@ void TagEditorPropertiesTab::stageTrackChanges(const TrackList& tracks, bool met
 
 void TagEditorPropertiesTab::refreshTrackScope()
 {
+    updateLovedEditable();
     m_editor->setTracks(activeTracks());
+}
+
+void TagEditorPropertiesTab::updateLovedEditable()
+{
+    m_editor->setLovedEditable(canSaveTrackStats(m_library, activeTracks(), Track::Stat::Loved));
 }
 
 TrackList TagEditorPropertiesTab::activeTracks() const

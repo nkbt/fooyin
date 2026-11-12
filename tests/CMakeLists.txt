@@ -145,7 +145,24 @@ if(TARGET fileops)
 endif()
 
 if(TARGET tageditor)
-    target_sources(test_unifiedmusiclibrary PRIVATE ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorstats.cpp)
+    target_sources(
+        test_unifiedmusiclibrary
+        PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/settings/tageditorfieldregistry.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorautocompletedelegate.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditoreditor.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditoritem.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditormodel.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorpopulator.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorpropertiestab.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorsettings.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorstats.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tageditorview.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tagfilldialog.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tagfilloperation.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tagfillpattern.cpp
+            ${CMAKE_SOURCE_DIR}/src/plugins/tageditor/tagfillpreviewmodel.cpp
+    )
     target_include_directories(test_unifiedmusiclibrary PRIVATE ${CMAKE_SOURCE_DIR}/src/plugins/tageditor)
     target_compile_definitions(test_unifiedmusiclibrary PRIVATE FOOYIN_TEST_TAGEDITOR)
 

@@ -27,6 +27,7 @@ class QDialog;
 
 namespace Fooyin {
 class ActionManager;
+class MusicLibrary;
 class SettingsManager;
 
 namespace TagEditor {
@@ -40,7 +41,7 @@ class TagEditorPropertiesTab : public PropertiesTabWidget
 
 public:
     explicit TagEditorPropertiesTab(ActionManager* actionManager, TagEditorFieldRegistry* registry,
-                                    SettingsManager* settings, QWidget* parent = nullptr);
+                                    MusicLibrary* library, SettingsManager* settings, QWidget* parent = nullptr);
     ~TagEditorPropertiesTab() override;
 
     void setTracks(const TrackList& tracks);
@@ -63,12 +64,14 @@ private:
     TrackList commitCurrentScopeEdits();
     void stageTrackChanges(const TrackList& tracks, bool metadataChanges);
     void refreshTrackScope();
+    void updateLovedEditable();
     [[nodiscard]] TrackList activeTracks() const;
     static void mergeTracks(TrackList& destination, const TrackList& source);
 
     void saveState() const;
     void restoreState() const;
 
+    MusicLibrary* m_library;
     SettingsManager* m_settings;
     PropertiesDialogSession* m_session;
     TrackList m_tracks;

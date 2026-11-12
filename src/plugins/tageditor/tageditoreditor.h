@@ -56,6 +56,7 @@ public:
 
     void setTracks(const TrackList& tracks);
     void setReadOnly(bool readOnly);
+    void setLovedEditable(bool editable);
     [[nodiscard]] bool hasChanges() const;
     [[nodiscard]] bool hasOnlyStatChanges() const;
     [[nodiscard]] Track::Stats changedStats() const;

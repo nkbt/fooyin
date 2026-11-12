@@ -48,6 +48,7 @@ public:
 
     void setRatingRow(int row);
     void setLoveRow(int row);
+    void setLovedEditable(bool editable);
 
     void capitaliseRows(const QModelIndexList& rows);
     void autoNumberTracks();

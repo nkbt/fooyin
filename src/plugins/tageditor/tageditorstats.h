@@ -27,5 +27,7 @@ class MusicLibrary;
 namespace TagEditor {
 //! Saves edited @p stats of @p tracks. Loved uses the native edit path, so an external library can own it.
 void saveTrackStats(MusicLibrary* library, const TrackList& tracks, Track::Stats stats);
+//! Returns @c true when saveTrackStats() can change @p stats of every track in @p tracks.
+[[nodiscard]] bool canSaveTrackStats(MusicLibrary* library, const TrackList& tracks, Track::Stats stats);
 } // namespace TagEditor
 } // namespace Fooyin

@@ -279,7 +279,7 @@ public:
     /*!
      * Publishes the source-owned @p stats of @p tracks reported by the source of external @p library, and stores them in commit order with snapshots. The values are copied exactly and replace the library values before this function returns, with tracksUpdated() and tracksStatsChanged() emitted at once. Only tracks of @p library change, other statistics and tracks are kept, and no change request is emitted.
      *
-     * A rejected batch changes nothing. If the batch cannot be stored, each published track returns to its last stored values unless a later publication replaced it.
+     * A rejected batch changes nothing. A batch which cannot be stored keeps its published values in the library, and externalTrackStatsFinished() reports the failure; the caller decides how to recover.
      * @note @p operation must be unique and non-null; externalTrackStatsFinished() reports its result once, after the store.
      */
     virtual void applyExternalTrackStats(const LibraryInfo& library, const TrackList& tracks, Track::Stats stats,

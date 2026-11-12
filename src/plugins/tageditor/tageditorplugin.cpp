@@ -140,7 +140,7 @@ void TagEditorPlugin::initialise(const GuiPluginContext& context)
 
 TagEditorPropertiesTab* TagEditorPlugin::createEditor(const TrackList& tracks)
 {
-    auto* tagEditor = new TagEditorPropertiesTab(m_actionManager, m_registry, m_settings);
+    auto* tagEditor = new TagEditorPropertiesTab(m_actionManager, m_registry, m_library, m_settings);
     tagEditor->setReadOnly(!canWriteTracks(tracks, m_audioLoader));
     tagEditor->setTracks(tracks);
     QObject::connect(tagEditor, &TagEditorPropertiesTab::trackMetadataChanged, tagEditor,

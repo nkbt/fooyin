@@ -162,6 +162,7 @@ public:
     std::vector<TagEditorField> m_fields;
     int m_ratingRow{-1};
     int m_loveRow{-1};
+    bool m_lovedEditable{true};
 
     TagEditorItem m_root;
     TagEditorTagMap m_tags;
@@ -297,6 +298,18 @@ void TagEditorModel::populate(TagEditorDataPtr data)
 void TagEditorModel::setLoveRow(int row)
 {
     p->m_loveRow = row;
+}
+
+void TagEditorModel::setLovedEditable(bool editable)
+{
+    if(p->m_lovedEditable == editable) {
+        return;
+    }
+    p->m_lovedEditable = editable;
+
+    if(const int rows = rowCount({}); rows > 0) {
+        Q_EMIT dataChanged(index(0, 1, {}), index(rows - 1, 1, {}));
+    }
 }
 
 void TagEditorModel::setRatingRow(int row)
@@ -596,6 +609,12 @@ Qt::ItemFlags TagEditorModel::flags(const QModelIndex& index) const
 
     auto flags = ExtendableTableModel::flags(index);
 
+    if(index.column() == 1 && !p->m_lovedEditable
+       && statForField(static_cast<TagEditorItem*>(index.internalPointer())->field().scriptField)
+              == Track::Stat::Loved) {
+        return flags & ~Qt::ItemIsEnabled;
+    }
+
     if((index.column() != 0 || !index.data(TagEditorItem::IsDefault).toBool())) {
         flags |= Qt::ItemIsEditable;
     }
@@ -682,6 +701,11 @@ QVariant TagEditorModel::data(const QModelIndex& index, int role) const
         return item->valueChanged() ? item->changedDisplayValue() : item->displayValue();
     }
 
+    if(role == Qt::ToolTipRole && index.column() == 1 && !p->m_lovedEditable
+       && statForField(item->field().scriptField) == Track::Stat::Loved) {
+        return tr("The source of these tracks can’t change Loved at the moment.");
+    }
+
     if(role == Qt::ToolTipRole && index.row() == p->m_ratingRow
        && index.data(StarDelegate::Role::MixedValues).toBool()) {
         return tr("Multiple values. Choose a rating to apply it to all selected tracks.");
@@ -724,6 +748,10 @@ bool TagEditorModel::setData(const QModelIndex& index, const QVariant& value, in
             break;
         }
         case 1: {
+            if(!p->m_lovedEditable && statForField(item->field().scriptField) == Track::Stat::Loved) {
+                return false;
+            }
+
             QString setValue = value.toString();
 
             if(index.row() == p->m_loveRow) {

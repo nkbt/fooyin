@@ -122,7 +122,9 @@ Track mergeTrackUpdate(const Track& currentTrack, const Track& updatedTrack, Lib
             break;
         case LibraryTrackUpdateType::Stats:
             mergeTrackStats(mergedTrack, updatedTrack,
-                            currentTrack.externalLibraryPath().isEmpty() ? Track::Stat::All : updatedStats);
+                            currentTrack.externalLibraryPath().isEmpty()
+                                ? Track::Stat::All
+                                : updatedStats & ~currentTrack.readOnlyStats());
             mergedTrack.setModifiedTime(updatedTrack.modifiedTime());
             if(updatedStats.testFlag(Track::Stat::Rating)) {
                 const QString writeTag = ratingTagPolicy().effectiveWriteTag();
@@ -243,13 +245,23 @@ struct ExternalStatsHandler
     QPointer<QObject> handler;
 };
 
+// Each stat records the publication that last set it, so that an older commit settles only the stats it still owns.
 struct PendingExternalStats
 {
     Track published;
-    Track confirmed;
-    Track::Stats stats;
-    uint64_t generation;
+    uint64_t lovedGeneration{0};
+    uint64_t ratingGeneration{0};
+    uint64_t playcountGeneration{0};
 };
+
+Track::Stats pendingStats(const PendingExternalStats& pending)
+{
+    Track::Stats stats;
+    stats.setFlag(Track::Stat::Loved, pending.lovedGeneration != 0);
+    stats.setFlag(Track::Stat::Rating, pending.ratingGeneration != 0);
+    stats.setFlag(Track::Stat::Playcount, pending.playcountGeneration != 0);
+    return stats;
+}
 
 bool statChanged(const Track& track, const Track& otherTrack, const Track::Stat stat)
 {
@@ -1166,12 +1178,6 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalLibrarySnapshot(Lib
     }
 
     setTracks(std::move(sortedTracks));
-
-    for(const Track& track : sortedUpdatedTracks) {
-        if(const auto pending = m_pendingExternalStats.find(track.id()); pending != m_pendingExternalStats.end()) {
-            pending->second.confirmed.replaceStats(track, pending->second.stats);
-        }
-    }
     applyPendingExternalStats(sortedUpdatedTracks);
 
     if(!sortedUpdatedTracks.empty()) {
@@ -1212,15 +1218,16 @@ std::optional<TrackList> UnifiedMusicLibraryPrivate::publishExternalTrackStats(c
 
     const uint64_t generation = ++m_externalStatsGeneration;
     for(const Track& publishedTrack : publishedTracks) {
-        const auto [pending, inserted] = m_pendingExternalStats.try_emplace(
-            publishedTrack.id(), PendingExternalStats{.published  = publishedTrack,
-                                                      .confirmed  = m_tracks.at(m_trackIndices.at(publishedTrack.id())),
-                                                      .stats      = sourceStats,
-                                                      .generation = generation});
-        if(!inserted) {
-            pending->second.published.replaceStats(publishedTrack, sourceStats);
-            pending->second.stats |= sourceStats;
-            pending->second.generation = generation;
+        auto& pending = m_pendingExternalStats[publishedTrack.id()];
+        pending.published.replaceStats(publishedTrack, sourceStats);
+        if(sourceStats.testFlag(Track::Stat::Loved)) {
+            pending.lovedGeneration = generation;
+        }
+        if(sourceStats.testFlag(Track::Stat::Rating)) {
+            pending.ratingGeneration = generation;
+        }
+        if(sourceStats.testFlag(Track::Stat::Playcount)) {
+            pending.playcountGeneration = generation;
         }
     }
 
@@ -1293,7 +1300,7 @@ void UnifiedMusicLibraryPrivate::applyPendingExternalStats(TrackList& tracks) co
 
     for(Track& track : tracks) {
         if(const auto pending = m_pendingExternalStats.find(track.id()); pending != m_pendingExternalStats.cend()) {
-            track.replaceStats(pending->second.published, pending->second.stats);
+            track.replaceStats(pending->second.published, pendingStats(pending->second));
         }
     }
 }
@@ -1320,17 +1327,17 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalTrackStats(LibraryI
             continue;
         }
 
-        if(pending->second.generation != generation) {
-            if(stored) {
-                pending->second.confirmed.replaceStats(publishedTrack, sourceStats);
-            }
-            continue;
+        if(pending->second.lovedGeneration == generation) {
+            pending->second.lovedGeneration = 0;
         }
-
-        const PendingExternalStats settled{pending->second};
-        m_pendingExternalStats.erase(pending);
-        if(!stored) {
-            publishTrackStats({settled.confirmed}, settled.stats);
+        if(pending->second.ratingGeneration == generation) {
+            pending->second.ratingGeneration = 0;
+        }
+        if(pending->second.playcountGeneration == generation) {
+            pending->second.playcountGeneration = 0;
+        }
+        if(pendingStats(pending->second) == Track::Stat::None) {
+            m_pendingExternalStats.erase(pending);
         }
     }
 

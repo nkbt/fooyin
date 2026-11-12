@@ -31,6 +31,11 @@
 #include "core/playlist/playlisthandler.h"
 #include "core/playlist/playlistloader.h"
 #ifdef FOOYIN_TEST_TAGEDITOR
+#include "settings/tageditorfieldregistry.h"
+#include "tageditoritem.h"
+#include "tageditormodel.h"
+#include "tageditorpropertiestab.h"
+#include "tageditorsettings.h"
 #include "tageditorstats.h"
 #endif
 #include <core/coresettings.h>
@@ -44,6 +49,15 @@
 #include <utils/database/dbconnectionprovider.h>
 #include <utils/database/dbquery.h>
 #include <utils/settings/settingsmanager.h>
+#ifdef FOOYIN_TEST_TAGEDITOR
+#include <core/constants.h>
+#include <gui/guisettings.h>
+#include <utils/actions/actionmanager.h>
+
+#include <QApplication>
+#include <QMainWindow>
+#include <QTimer>
+#endif
 
 #include <QBuffer>
 #include <QCoreApplication>
@@ -97,7 +111,14 @@ QCoreApplication* ensureCoreApplication()
     static char appName[]        = "fooyin-unifiedmusiclibrary-test";
     static char* argv[]          = {appName, nullptr};
     static QCoreApplication* app = []() {
+#ifdef FOOYIN_TEST_TAGEDITOR
+        if(qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+            qputenv("QT_QPA_PLATFORM", "offscreen");
+        }
+        auto* instance = new QApplication(argc, argv);
+#else
         auto* instance = new QCoreApplication(argc, argv);
+#endif
         QCoreApplication::setApplicationName(QString::fromLatin1(appName));
         return instance;
     }();
@@ -3138,16 +3159,22 @@ TEST_F(UnifiedMusicLibraryTest, ExternalStatsPublicationIsVisibleWhilePersistenc
     EXPECT_TRUE(stored.isLoved());
 }
 
-TEST_F(UnifiedMusicLibraryTest, ExternalStatsPublicationFailureRestoresStoredValues)
+TEST_F(UnifiedMusicLibraryTest, ExternalStatsPublicationStaysVisibleWhenStorageFails)
 {
     const auto library = context().library.addExternalLibrary(u"test-source://failing"_s, u"External"_s);
     ASSERT_TRUE(library);
     context().library.setExternalLibraryReadOnlyStats(*library, Track::Stat::Loved);
+    const auto localLibrary = context().library.addExternalLibrary(u"test-source://local"_s, u"Local"_s);
+    ASSERT_TRUE(localLibrary);
     QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
     context().library.applyExternalLibrarySnapshot(
         *library, {externalTrack(u"test-source://failing/item"_s, u"Item"_s)}, QUuid::createUuid());
     ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
-    const Track track = tracksByPath(context().library.libraryTracks()).at(u"test-source://failing/item"_s);
+    context().library.applyExternalLibrarySnapshot(
+        *localLibrary, {externalTrack(u"test-source://local/item"_s, u"Local"_s)}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const Track track      = tracksByPath(context().library.libraryTracks()).at(u"test-source://failing/item"_s);
+    const Track localTrack = tracksByPath(context().library.libraryTracks()).at(u"test-source://local/item"_s);
 
     QSignalSpy requested{&context().library, &MusicLibrary::externalTrackStatsChangeRequested};
     QSignalSpy statsChanged{&context().library, &MusicLibrary::tracksStatsChanged};
@@ -3160,20 +3187,16 @@ TEST_F(UnifiedMusicLibraryTest, ExternalStatsPublicationFailureRestoresStoredVal
 
     Track loved{track};
     loved.setLoved(true);
-    const QUuid failedOperation = QUuid::createUuid();
-    context().library.applyExternalTrackStats(*library, {loved}, Track::Stat::Loved, failedOperation);
+    const QUuid operation = QUuid::createUuid();
+    context().library.applyExternalTrackStats(*library, {loved}, Track::Stat::Loved, operation);
     EXPECT_TRUE(context().library.trackForId(track.id()).isLoved());
 
     const QVariantList failure = waitForSignal(finished);
     ASSERT_EQ(failure.size(), 3);
-    EXPECT_EQ(failure.at(0).toUuid(), failedOperation);
+    EXPECT_EQ(failure.at(0).toUuid(), operation);
     EXPECT_EQ(failure.at(1).toInt(), library->id);
     EXPECT_FALSE(failure.at(2).toBool());
-    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
-    ASSERT_EQ(statsChanged.size(), 2);
-    EXPECT_TRUE(statsChanged.at(0).at(0).value<TrackList>().front().isLoved());
-    EXPECT_FALSE(statsChanged.at(1).at(0).value<TrackList>().front().isLoved());
-    EXPECT_TRUE(requested.empty());
+    EXPECT_TRUE(context().library.trackForId(track.id()).isLoved());
 
     TrackDatabase database;
     database.initialise(DbConnectionProvider{context().dbPool});
@@ -3184,16 +3207,153 @@ TEST_F(UnifiedMusicLibraryTest, ExternalStatsPublicationFailureRestoresStoredVal
     DbQuery dropInsert{dbProvider.db(), u"DROP TRIGGER FailTrackStats;"_s};
     ASSERT_TRUE(dropInsert.exec()) << dropInsert.lastError().text().toStdString();
 
-    const QUuid storedOperation = QUuid::createUuid();
-    context().library.applyExternalTrackStats(*library, {loved}, Track::Stat::Loved, storedOperation);
-    const QVariantList success = waitForSignal(finished);
-    ASSERT_EQ(success.size(), 3);
-    EXPECT_EQ(success.at(0).toUuid(), storedOperation);
-    EXPECT_TRUE(success.at(2).toBool());
+    Track rated{track};
+    rated.setRating(0.4F);
+    Track localLoved{localTrack};
+    localLoved.setLoved(true);
+    context().library.updateTrackStats(rated, Track::Stat::Rating);
+    context().library.updateTrackStats(localLoved, Track::Stat::Loved);
+    ASSERT_TRUE(waitForCondition([&]() {
+        return context().library.trackForId(track.id()).rating() == 0.4F
+            && context().library.trackForId(localTrack.id()).isLoved();
+    }));
     EXPECT_TRUE(context().library.trackForId(track.id()).isLoved());
+
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(finished.empty());
+    EXPECT_TRUE(requested.empty());
+    for(const QVariantList& change : statsChanged) {
+        for(const Track& changedTrack : change.at(0).value<TrackList>()) {
+            if(changedTrack.id() == track.id()) {
+                EXPECT_TRUE(changedTrack.isLoved());
+            }
+        }
+    }
+    ASSERT_TRUE(database.reloadTrack(stored));
+    EXPECT_FALSE(stored.isLoved());
+    EXPECT_FLOAT_EQ(stored.rating(), 0.4F);
+}
+
+TEST_F(UnifiedMusicLibraryTest, ExternalStatsRollbackStaysVisibleWhenItsStorageFails)
+{
+    const auto library = context().library.addExternalLibrary(u"test-source://rollback"_s, u"External"_s);
+    ASSERT_TRUE(library);
+    context().library.setExternalLibraryReadOnlyStats(*library, Track::Stat::Loved);
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(
+        *library, {externalTrack(u"test-source://rollback/item"_s, u"Item"_s)}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const Track track = tracksByPath(context().library.libraryTracks()).at(u"test-source://rollback/item"_s);
+
+    QSignalSpy statsChanged{&context().library, &MusicLibrary::tracksStatsChanged};
+    QSignalSpy finished{&context().library, &MusicLibrary::externalTrackStatsFinished};
+
+    Track optimistic{track};
+    optimistic.setLoved(true);
+    const QUuid optimisticOperation = QUuid::createUuid();
+    context().library.applyExternalTrackStats(*library, {optimistic}, Track::Stat::Loved, optimisticOperation);
+    const QVariantList optimisticResult = waitForSignal(finished);
+    EXPECT_EQ(optimisticResult.at(0).toUuid(), optimisticOperation);
+    EXPECT_TRUE(optimisticResult.at(2).toBool());
+
+    const DbConnectionProvider dbProvider{context().dbPool};
+    DbQuery failInsert{dbProvider.db(), u"CREATE TRIGGER FailTrackStats BEFORE INSERT ON TrackStats "
+                                        u"BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;"_s};
+    ASSERT_TRUE(failInsert.exec()) << failInsert.lastError().text().toStdString();
+
+    Track confirmed{track};
+    confirmed.setLoved(false);
+    const QUuid rollbackOperation = QUuid::createUuid();
+    context().library.applyExternalTrackStats(*library, {confirmed}, Track::Stat::Loved, rollbackOperation);
+    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
+
+    const QVariantList rollbackResult = waitForSignal(finished);
+    EXPECT_EQ(rollbackResult.at(0).toUuid(), rollbackOperation);
+    EXPECT_FALSE(rollbackResult.at(2).toBool());
+    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
+
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(finished.empty());
+    ASSERT_EQ(statsChanged.size(), 2);
+    EXPECT_TRUE(statsChanged.at(0).at(0).value<TrackList>().front().isLoved());
+    EXPECT_FALSE(statsChanged.at(1).at(0).value<TrackList>().front().isLoved());
+    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
+
+    TrackDatabase database;
+    database.initialise(DbConnectionProvider{context().dbPool});
+    Track stored{track};
     ASSERT_TRUE(database.reloadTrack(stored));
     EXPECT_TRUE(stored.isLoved());
-    EXPECT_TRUE(requested.empty());
+
+    DbQuery dropInsert{dbProvider.db(), u"DROP TRIGGER FailTrackStats;"_s};
+    ASSERT_TRUE(dropInsert.exec()) << dropInsert.lastError().text().toStdString();
+}
+
+TEST_F(UnifiedMusicLibraryTest, ExternalStatsDisjointMasksSettleIndependently)
+{
+    const auto library = context().library.addExternalLibrary(u"test-source://masks"_s, u"External"_s);
+    ASSERT_TRUE(library);
+    context().library.setExternalLibraryReadOnlyStats(*library, Track::Stat::Loved | Track::Stat::Rating);
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(*library, {externalTrack(u"test-source://masks/item"_s, u"Item"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const Track track = tracksByPath(context().library.libraryTracks()).at(u"test-source://masks/item"_s);
+
+    const DbConnectionProvider dbProvider{context().dbPool};
+    DbQuery failInsert{dbProvider.db(), u"CREATE TRIGGER FailTrackStats BEFORE INSERT ON TrackStats "
+                                        u"WHEN NEW.Loved = 1 "
+                                        u"BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;"_s};
+    ASSERT_TRUE(failInsert.exec()) << failInsert.lastError().text().toStdString();
+
+    QSignalSpy statsChanged{&context().library, &MusicLibrary::tracksStatsChanged};
+    QSignalSpy finished{&context().library, &MusicLibrary::externalTrackStatsFinished};
+
+    Track loved{track};
+    loved.setLoved(true);
+    Track rated{track};
+    rated.setRating(0.8F);
+    const QUuid lovedOperation  = QUuid::createUuid();
+    const QUuid ratingOperation = QUuid::createUuid();
+    context().library.applyExternalTrackStats(*library, {loved}, Track::Stat::Loved, lovedOperation);
+    context().library.applyExternalTrackStats(*library, {rated}, Track::Stat::Rating, ratingOperation);
+    const Track published = context().library.trackForId(track.id());
+    EXPECT_TRUE(published.isLoved());
+    EXPECT_FLOAT_EQ(published.rating(), 0.8F);
+
+    ASSERT_TRUE(waitForCondition([&]() { return finished.size() == 2; }));
+    QCoreApplication::processEvents();
+    ASSERT_EQ(finished.size(), 2);
+    EXPECT_EQ(finished.at(0).at(0).toUuid(), lovedOperation);
+    EXPECT_FALSE(finished.at(0).at(2).toBool());
+    EXPECT_EQ(finished.at(1).at(0).toUuid(), ratingOperation);
+    EXPECT_TRUE(finished.at(1).at(2).toBool());
+    ASSERT_EQ(statsChanged.size(), 2);
+    EXPECT_EQ(statsChanged.at(0).at(1).value<Track::Stats>(), Track::Stats{Track::Stat::Loved});
+    EXPECT_EQ(statsChanged.at(1).at(1).value<Track::Stats>(), Track::Stats{Track::Stat::Rating});
+
+    const Track settled = context().library.trackForId(track.id());
+    EXPECT_TRUE(settled.isLoved());
+    EXPECT_FLOAT_EQ(settled.rating(), 0.8F);
+
+    TrackDatabase database;
+    database.initialise(DbConnectionProvider{context().dbPool});
+    Track stored{track};
+    ASSERT_TRUE(database.reloadTrack(stored));
+    EXPECT_FALSE(stored.isLoved());
+    EXPECT_FLOAT_EQ(stored.rating(), 0.8F);
+
+    UnifiedMusicLibrary reloaded{&context().libraryManager, context().dbPool,   context().playlistLoader,
+                                 context().audioLoader,     context().remoteIo, &context().settings};
+    QSignalSpy loaded{&reloaded, &MusicLibrary::tracksLoaded};
+    reloaded.loadAllTracks();
+    waitForSignal(loaded);
+    const Track reloadedTrack = reloaded.trackForId(track.id());
+    EXPECT_FALSE(reloadedTrack.isLoved());
+    EXPECT_FLOAT_EQ(reloadedTrack.rating(), 0.8F);
+
+    DbQuery dropInsert{dbProvider.db(), u"DROP TRIGGER FailTrackStats;"_s};
+    ASSERT_TRUE(dropInsert.exec()) << dropInsert.lastError().text().toStdString();
 }
 
 TEST_F(UnifiedMusicLibraryTest, ExternalStatsPublicationReplacesPlayTimesExactly)
@@ -3315,6 +3475,106 @@ TEST_F(UnifiedMusicLibraryTest, TagEditorLovedEditsUseTheExternalStatsHandler)
     context().library.setExternalLibraryActive(*library, true);
     TagEditor::saveTrackStats(&context().library, {edited}, Track::Stat::Loved);
     EXPECT_EQ(requests.size(), 2U);
+}
+
+TEST_F(UnifiedMusicLibraryTest, TagEditorPropertiesTabLovedFollowsTheSourceCapability)
+{
+    auto& settings = context().settings;
+    settings.createTempSetting<Settings::Gui::TrackEditorAppearance>(QVariant::fromValue(TrackEditorAppearance{}));
+    settings.createSetting(QString::fromLatin1(TagEditor::SettingsKeys::MultiValueSeparators),
+                           QString::fromLatin1(TagEditor::SettingsKeys::DefaultMultiValueSeparators));
+    settings.createSetting(QString::fromLatin1(TagEditor::SettingsKeys::AutoFillMultiValueSeparators),
+                           QString::fromLatin1(TagEditor::SettingsKeys::DefaultMultiValueSeparators));
+    settings.createSetting(QString::fromLatin1(TagEditor::SettingsKeys::EditValuesOnSingleClick), true);
+    settings.fileSet(u"TagEditor/DontAskAgain"_s, true);
+
+    const auto library = context().library.addExternalLibrary(u"test-source://properties"_s, u"External"_s);
+    ASSERT_TRUE(library);
+    context().library.setExternalLibraryReadOnlyStats(*library, Track::Stat::Loved);
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(
+        *library, {externalTrack(u"test-source://properties/item"_s, u"Item"_s)}, QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const Track track = tracksByPath(context().library.libraryTracks()).at(u"test-source://properties/item"_s);
+
+    std::vector<std::pair<TrackList, Track::Stats>> requests;
+    QObject::connect(&context().library, &MusicLibrary::externalTrackStatsChangeRequested, &context().library,
+                     [&requests](const LibraryInfo& /*library*/, const TrackList& tracks, Track::Stats stats) {
+                         requests.emplace_back(tracks, stats);
+                     });
+
+    QMainWindow mainWindow;
+    ActionManager actionManager{&settings};
+    actionManager.setMainWindow(&mainWindow);
+    TagEditor::TagEditorFieldRegistry registry{&settings};
+    TagEditor::TagEditorPropertiesTab tab{&actionManager, &registry, &context().library, &settings};
+    QObject::connect(&tab, &TagEditor::TagEditorPropertiesTab::trackStatsChanged, &context().library,
+                     [this](const TrackList& tracks, Track::Stats stats) {
+                         TagEditor::saveTrackStats(&context().library, tracks, stats);
+                     });
+
+    auto* model = tab.findChild<TagEditor::TagEditorModel*>();
+    ASSERT_NE(model, nullptr);
+    const auto lovedIndex = [model]() {
+        for(int row{0}; row < model->rowCount({}); ++row) {
+            const QModelIndex index = model->index(row, 1, {});
+            if(static_cast<TagEditor::TagEditorItem*>(index.internalPointer())
+                   ->field()
+                   .scriptField.compare(QLatin1StringView{Constants::MetaData::LoveEditor}, Qt::CaseInsensitive)
+               == 0) {
+                return index;
+            }
+        }
+        return QModelIndex{};
+    };
+
+    tab.setTracks({track});
+    ASSERT_TRUE(waitForCondition([&]() { return lovedIndex().isValid(); }));
+
+    EXPECT_FALSE(model->flags(lovedIndex()).testFlag(Qt::ItemIsEnabled));
+    EXPECT_FALSE(model->data(lovedIndex(), Qt::ToolTipRole).toString().isEmpty());
+    EXPECT_FALSE(model->setData(lovedIndex(), u"1"_s, Qt::EditRole));
+    EXPECT_FALSE(tab.hasPendingScopeChanges());
+
+    auto handler = std::make_unique<QObject>();
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::Loved, handler.get());
+    EXPECT_TRUE(model->flags(lovedIndex()).testFlag(Qt::ItemIsEnabled));
+    EXPECT_TRUE(model->data(lovedIndex(), Qt::ToolTipRole).toString().isEmpty());
+    ASSERT_TRUE(model->setData(lovedIndex(), u"1"_s, Qt::EditRole));
+    ASSERT_TRUE(tab.hasPendingScopeChanges());
+
+    handler.reset();
+    EXPECT_FALSE(model->flags(lovedIndex()).testFlag(Qt::ItemIsEnabled));
+    EXPECT_TRUE(tab.hasPendingScopeChanges());
+
+    int warnings{0};
+    QTimer closeWarning;
+    QObject::connect(&closeWarning, &QTimer::timeout, &closeWarning, [&warnings]() {
+        if(auto* dialog = QApplication::activeModalWidget()) {
+            ++warnings;
+            dialog->close();
+        }
+    });
+    closeWarning.start(10);
+    tab.apply();
+    closeWarning.stop();
+    EXPECT_EQ(warnings, 1);
+    EXPECT_TRUE(requests.empty());
+    EXPECT_FALSE(context().library.trackForId(track.id()).isLoved());
+
+    QObject restoredHandler;
+    context().library.setExternalLibraryStatsHandler(*library, Track::Stat::Loved, &restoredHandler);
+    context().library.setExternalLibraryActive(*library, false);
+    EXPECT_FALSE(model->flags(lovedIndex()).testFlag(Qt::ItemIsEnabled));
+    context().library.setExternalLibraryActive(*library, true);
+    EXPECT_TRUE(model->flags(lovedIndex()).testFlag(Qt::ItemIsEnabled));
+
+    tab.apply();
+    ASSERT_EQ(requests.size(), 1U);
+    EXPECT_EQ(requests.front().second, Track::Stats{Track::Stat::Loved});
+    ASSERT_EQ(requests.front().first.size(), 1U);
+    EXPECT_EQ(requests.front().first.front().id(), track.id());
+    EXPECT_TRUE(requests.front().first.front().isLoved());
 }
 #endif
 } // namespace Fooyin::Testing

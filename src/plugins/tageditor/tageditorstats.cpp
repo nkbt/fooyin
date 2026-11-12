@@ -21,6 +21,8 @@
 
 #include <core/library/musiclibrary.h>
 
+#include <algorithm>
+
 namespace Fooyin::TagEditor {
 void saveTrackStats(MusicLibrary* library, const TrackList& tracks, const Track::Stats stats)
 {
@@ -30,5 +32,12 @@ void saveTrackStats(MusicLibrary* library, const TrackList& tracks, const Track:
     if(const Track::Stats otherStats = stats & ~Track::Stats{Track::Stat::Loved}; otherStats != Track::Stat::None) {
         library->updateTrackStats(tracks, otherStats);
     }
+}
+
+bool canSaveTrackStats(MusicLibrary* library, const TrackList& tracks, const Track::Stats stats)
+{
+    return !stats.testFlag(Track::Stat::Loved) || std::ranges::all_of(tracks, [library](const Track& track) {
+        return library->canEditTrackStats(track, Track::Stat::Loved);
+    });
 }
 } // namespace Fooyin::TagEditor
