@@ -17,6 +17,9 @@ if(WIN32)
         COMMENT "Deploying the Qt Test runtime"
     )
     add_dependencies(fooyin_test_runtime fooyin)
+elseif(APPLE)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/run")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 endif()
 
 function(fooyin_add_test name)

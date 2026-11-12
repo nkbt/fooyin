@@ -117,6 +117,45 @@ See [BUILD.md](BUILD.md) for dependencies, build options, and installation instr
 
 ## Platform support
 
+### macOS source installation
+
+Install Xcode and its command-line tools. The following Homebrew packages provide the core build dependencies and the SDL audio output:
+
+```sh
+HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install cmake ninja pkgconf qtbase qtsvg qttools taglib ffmpeg icu4c@78 libarchive sdl2 googletest
+```
+
+Configure and build from this checkout:
+
+```sh
+export FOOYIN_PREFIX="$PWD/tmp/macos-sdk"
+export FOOYIN_INSTALL_PREFIX="$PWD/tmp/macos-install"
+cmake -S . -B tmp/macos-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix);$(brew --prefix icu4c@78)" -DCMAKE_INSTALL_PREFIX="$FOOYIN_INSTALL_PREFIX" -DINSTALL_HEADERS=ON -DBUILD_TESTING=ON -DPLUGIN_SELECTION=-scrobbler
+QT_QPA_PLATFORM=offscreen cmake --build tmp/macos-build --parallel 2
+cmake --install tmp/macos-build --component fooyin_development --prefix "$FOOYIN_PREFIX"
+```
+
+Qt test discovery requires `QT_QPA_PLATFORM=offscreen` on macOS. The build keeps test executables outside `fooyin.app`. Keep the development SDK separate from the deployed app so plugin tests load one copy of Qt.
+
+Homebrew's SDL2 package uses SDL2-compat, which loads SDL3 dynamically. The SDL output installation copies SDL3 into `Contents/Frameworks/libSDL3.dylib` when the SDL3 package is available. It copies the real library rather than a Homebrew symlink. Complete dependency deployment before signing the app. Deployment can take several minutes.
+
+The `external-libraries` branch supports [fooyin-jellyfin](https://github.com/nkbt/fooyin-jellyfin). For remote scrobbling, install [fooyin-scrobbler](https://github.com/nkbt/fooyin-scrobbler) into the same prefix. The configure command excludes the bundled scrobbler to prevent a duplicate plugin identity. Omit `-DPLUGIN_SELECTION=-scrobbler` when using only the bundled scrobbler.
+
+Install external plugins before the final dependency deployment. Complete each command before starting another command that changes the bundle:
+
+```sh
+cmake --install tmp/macos-build --component fooyin
+codesign --force --deep --sign - "$FOOYIN_INSTALL_PREFIX/fooyin.app"
+codesign --verify --deep --strict "$FOOYIN_INSTALL_PREFIX/fooyin.app"
+mkdir -p "$HOME/Applications"
+ditto "$FOOYIN_INSTALL_PREFIX/fooyin.app" "$HOME/Applications/fooyin.app"
+open "$HOME/Applications/fooyin.app"
+```
+
+The app uses a local ad-hoc signature. Sign again after changing a plugin or a bundled library. A local signature does not provide Apple notarisation.
+
+The [Jellyfin profile migration instructions](https://github.com/nkbt/fooyin-jellyfin#move-a-profile-to-macos) list the native macOS profile directories. Copy `fooyin.db` with the settings because it contains the host accounts used by Jellyfin and the scrobbler. Select `SDL2 (coreaudio)` with the default device when replacing a Linux audio output.
+
 fooyin is developed and supported on Linux and Windows. Build configurations and CI workflows are also maintained for macOS.
 
 Official macOS support is coming soon.
