@@ -80,7 +80,8 @@ public:
     [[nodiscard]] virtual bool canApply() const;
 
     virtual void load();
-    virtual void apply();
+    //! Returns @c false, after telling the user why, when the pending changes cannot be saved and stay staged.
+    virtual bool apply();
     virtual void finish();
 
     virtual void setSession(PropertiesDialogSession* session);
@@ -90,8 +91,6 @@ public:
     [[nodiscard]] virtual bool isAvailableForScope(const TrackList& tracks) const;
     [[nodiscard]] virtual bool hasPendingScopeChanges() const;
     [[nodiscard]] virtual bool commitPendingChanges();
-    //! Returns @c false, after telling the user why, when apply() cannot save the pending changes, which stay staged.
-    [[nodiscard]] virtual bool prepareApply();
 
 Q_SIGNALS:
     void pendingChangesStateChanged();
@@ -119,8 +118,7 @@ public:
     void updateIndex(int index);
     void setVisited(bool visited);
 
-    [[nodiscard]] bool prepareApply();
-    virtual void apply();
+    virtual bool apply();
     virtual void finish();
 
 private:

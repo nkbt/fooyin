@@ -47,9 +47,10 @@ public:
      * Inserts @p addedTracks and updates @p updatedTracks in one transaction while @p library is still registered.
      * Fails without changes if a track belongs to another library. Statistics in @p sourceStats replace the stored
      * values of tracks in @p library; other statistics keep their stored values. Both lists are reloaded as stored.
+     * Only the @p sourceStats of @p unchangedTracks are stored, so storage matches the source after an earlier failure.
      */
     bool storeExternalSnapshot(const LibraryInfo& library, TrackList& addedTracks, TrackList& updatedTracks,
-                               Track::Stats sourceStats);
+                               const TrackList& unchangedTracks, Track::Stats sourceStats);
     /*!
      * Replaces the stored @p sourceStats of @p tracks in one transaction while @p library is still registered.
      * Fails without changes if a track does not belong to @p library. The tracks are reloaded as stored.

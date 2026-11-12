@@ -190,7 +190,7 @@ bool TrackDatabase::storeTracks(TrackList& tracks)
 }
 
 bool TrackDatabase::storeExternalSnapshot(const LibraryInfo& library, TrackList& addedTracks, TrackList& updatedTracks,
-                                          Track::Stats sourceStats)
+                                          const TrackList& unchangedTracks, Track::Stats sourceStats)
 {
     DbTransaction transaction{db()};
 
@@ -239,6 +239,16 @@ bool TrackDatabase::storeExternalSnapshot(const LibraryInfo& library, TrackList&
         // A detached track already holds its stored statistics and keeps its disabled state.
         if(!updateTrackData(track) || !insertOrUpdateStats(track, nullptr, importedStats, importedStats)
            || (track.libraryId() == library.id && !reloadTrack(track))) {
+            return false;
+        }
+    }
+
+    for(const Track& track : unchangedTracks) {
+        DbQuery ownerQuery{db(), ownerStatement};
+        ownerQuery.bindValue(u":trackId"_s, track.id());
+
+        if(!ownerQuery.exec() || !ownerQuery.next() || ownerQuery.value(0).toInt() != library.id
+           || !insertOrUpdateStats(track, nullptr, sourceStats, sourceStats)) {
             return false;
         }
     }

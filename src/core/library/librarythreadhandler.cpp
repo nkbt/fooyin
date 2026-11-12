@@ -1356,19 +1356,20 @@ void LibraryThreadHandler::cleanupTracks()
 
 QFuture<std::optional<std::pair<TrackList, TrackList>>>
 LibraryThreadHandler::storeExternalLibrarySnapshot(const LibraryInfo& library, const TrackList& addedTracks,
-                                                   const TrackList& updatedTracks, Track::Stats sourceStats)
+                                                   const TrackList& updatedTracks, const TrackList& unchangedTracks,
+                                                   Track::Stats sourceStats)
 {
     auto promise = std::make_shared<QPromise<std::optional<std::pair<TrackList, TrackList>>>>();
     auto future  = promise->future();
     promise->start();
 
-    QMetaObject::invokeMethod(&p->m_trackDatabaseManager, [this, promise, library, addedTracks, updatedTracks,
-                                                           sourceStats,
-                                                           workerToken = p->m_trackDatabaseManager.prepareWork()]() {
-        promise->addResult(p->m_trackDatabaseManager.storeExternalLibrarySnapshot(library, addedTracks, updatedTracks,
-                                                                                  sourceStats, workerToken));
-        promise->finish();
-    });
+    QMetaObject::invokeMethod(&p->m_trackDatabaseManager,
+                              [this, promise, library, addedTracks, updatedTracks, unchangedTracks, sourceStats,
+                               workerToken = p->m_trackDatabaseManager.prepareWork()]() {
+                                  promise->addResult(p->m_trackDatabaseManager.storeExternalLibrarySnapshot(
+                                      library, addedTracks, updatedTracks, unchangedTracks, sourceStats, workerToken));
+                                  promise->finish();
+                              });
 
     return future;
 }

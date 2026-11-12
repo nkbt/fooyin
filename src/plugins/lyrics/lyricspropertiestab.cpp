@@ -118,7 +118,7 @@ bool LyricsPropertiesTab::commitPendingChanges()
     return true;
 }
 
-void LyricsPropertiesTab::apply()
+bool LyricsPropertiesTab::apply()
 {
     commitPendingChanges();
 
@@ -161,6 +161,7 @@ void LyricsPropertiesTab::apply()
         appliedLyrics.isLocal = true;
     }
     Q_EMIT lyricsEdited(appliedLyrics);
+    return true;
 }
 
 void LyricsPropertiesTab::finish()

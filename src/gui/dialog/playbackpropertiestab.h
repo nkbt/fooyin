@@ -35,7 +35,7 @@ class PlaybackPropertiesTab : public PropertiesTabWidget
 public:
     PlaybackPropertiesTab(MusicLibrary* library, TrackList tracks, QWidget* parent = nullptr);
 
-    void apply() override;
+    bool apply() override;
 
     void setSession(PropertiesDialogSession* session) override;
     void setTrackScope(const TrackList& tracks) override;

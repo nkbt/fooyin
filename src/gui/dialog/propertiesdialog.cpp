@@ -582,23 +582,25 @@ void PropertiesDialogWidget::reject()
 
 bool PropertiesDialogWidget::apply()
 {
-    auto visitedTabs = std::views::filter(m_tabs, [&](const PropertiesTab& tab) { return tab.hasVisited(); });
-    for(PropertiesTab& tab : visitedTabs) {
-        if(!tab.prepareApply()) {
-            return false;
-        }
-    }
-
     if(m_writeProgress) {
         m_writeProgress->beginCollecting();
     }
 
+    bool applied{true};
+    auto visitedTabs = std::views::filter(m_tabs, [&](const PropertiesTab& tab) { return tab.hasVisited(); });
     for(PropertiesTab& tab : visitedTabs) {
-        tab.apply();
+        if(!tab.apply()) {
+            applied = false;
+            break;
+        }
     }
 
     if(m_writeProgress) {
         m_writeProgress->finishCollecting();
+    }
+
+    if(!applied) {
+        return false;
     }
 
     m_session.acceptChanges();
@@ -1150,7 +1152,10 @@ bool PropertiesTabWidget::canApply() const
 
 void PropertiesTabWidget::load() { }
 
-void PropertiesTabWidget::apply() { }
+bool PropertiesTabWidget::apply()
+{
+    return true;
+}
 
 void PropertiesTabWidget::finish() { }
 
@@ -1172,11 +1177,6 @@ bool PropertiesTabWidget::hasPendingScopeChanges() const
 }
 
 bool PropertiesTabWidget::commitPendingChanges()
-{
-    return true;
-}
-
-bool PropertiesTabWidget::prepareApply()
 {
     return true;
 }
@@ -1265,16 +1265,9 @@ void PropertiesTab::setVisited(bool visited)
     p->m_visited = visited;
 }
 
-bool PropertiesTab::prepareApply()
+bool PropertiesTab::apply()
 {
-    return !p->m_widget || p->m_widget->prepareApply();
-}
-
-void PropertiesTab::apply()
-{
-    if(p->m_widget) {
-        p->m_widget->apply();
-    }
+    return !p->m_widget || p->m_widget->apply();
 }
 
 void PropertiesTab::finish()

@@ -1049,6 +1049,7 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalLibrarySnapshot(Lib
 
     TrackList addedTracks;
     TrackList updatedTracks;
+    TrackList unchangedTracks;
     std::unordered_set<QString> snapshotPaths;
 
     for(Track& track : snapshotTracks) {
@@ -1099,6 +1100,9 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalLibrarySnapshot(Lib
            || lovedChanged || ratingChanged || playsChanged) {
             updatedTracks.push_back(track);
         }
+        else if(sourceStats != Track::Stat::None) {
+            unchangedTracks.push_back(track);
+        }
     }
 
     for(const Track& existingTrack : existingTracks | std::views::values) {
@@ -1110,8 +1114,8 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitApplyExternalLibrarySnapshot(Lib
         }
     }
 
-    const auto storeFuture
-        = m_threadHandler.storeExternalLibrarySnapshot(library, addedTracks, updatedTracks, sourceStats);
+    const auto storeFuture = m_threadHandler.storeExternalLibrarySnapshot(library, addedTracks, updatedTracks,
+                                                                          unchangedTracks, sourceStats);
     co_await qCoro(QFuture<void>{storeFuture}).waitForFinished();
 
     if(!lifetime) {

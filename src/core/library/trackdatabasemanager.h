@@ -63,7 +63,8 @@ public:
      */
     std::optional<std::pair<TrackList, TrackList>>
     storeExternalLibrarySnapshot(const LibraryInfo& library, TrackList addedTracks, TrackList updatedTracks,
-                                 Track::Stats sourceStats, std::stop_token workerToken);
+                                 const TrackList& unchangedTracks, Track::Stats sourceStats,
+                                 std::stop_token workerToken);
     /** Stores the source-owned @p sourceStats of @p tracks. Returns the stored tracks, or nothing on failure. */
     std::optional<TrackList> storeExternalTrackStats(const LibraryInfo& library, TrackList tracks,
                                                      Track::Stats sourceStats, std::stop_token workerToken);

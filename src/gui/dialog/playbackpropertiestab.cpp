@@ -83,7 +83,7 @@ PlaybackPropertiesTab::PlaybackPropertiesTab(MusicLibrary* library, TrackList tr
     refreshControls();
 }
 
-void PlaybackPropertiesTab::apply()
+bool PlaybackPropertiesTab::apply()
 {
     commitPendingChanges();
 
@@ -100,6 +100,7 @@ void PlaybackPropertiesTab::apply()
         m_library->updateTrackMetadata(changedTracks);
     }
     m_pendingChanges.clear();
+    return true;
 }
 
 void PlaybackPropertiesTab::setSession(PropertiesDialogSession* session)

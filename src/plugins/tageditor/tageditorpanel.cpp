@@ -138,12 +138,18 @@ bool TagEditorPanel::apply()
         return true;
     }
 
-    const bool statOnly = m_editor->hasOnlyStatChanges();
-    const auto stats    = m_editor->changedStats();
-    if(!canSaveTrackStats(m_library, m_currentTracks, stats)) {
+    const bool statOnly     = m_editor->hasOnlyStatChanges();
+    const auto stats        = m_editor->changedStats();
+    const auto canSaveLoved = [this, &stats]() {
+        if(canSaveTrackStats(m_library, m_currentTracks, stats)) {
+            return true;
+        }
         QMessageBox::warning(
             this, tr("Unable to Save Changes"),
             tr("The source of these tracks can’t change Loved at the moment. The changes were not saved."));
+        return false;
+    };
+    if(!canSaveLoved()) {
         return false;
     }
     if(!statOnly && !allDbOnlyTracks(m_currentTracks) && !m_settings->fileValue(DontAskAgain).toBool()) {
@@ -159,6 +165,10 @@ bool TagEditorPanel::apply()
         message.setDefaultButton(QMessageBox::No);
 
         if(message.exec() != QMessageBox::Yes) {
+            return false;
+        }
+        // The source can change while the confirmation runs its event loop.
+        if(!canSaveLoved()) {
             return false;
         }
         if(dontAskAgain->isChecked()) {

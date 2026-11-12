@@ -51,8 +51,7 @@ public:
     void setTrackScope(const TrackList& tracks) override;
     [[nodiscard]] bool hasPendingScopeChanges() const override;
     bool commitPendingChanges() override;
-    [[nodiscard]] bool prepareApply() override;
-    void apply() override;
+    bool apply() override;
     void updateTracks(const TrackList& tracks) override;
 
 Q_SIGNALS:
@@ -63,6 +62,7 @@ private:
     void autoFillValues();
     void handleFillDialogAccepted(const FillValuesResult& result);
     TrackList commitCurrentScopeEdits();
+    [[nodiscard]] bool canSaveLoved();
     void stageTrackChanges(const TrackList& tracks, bool metadataChanges);
     void refreshTrackScope();
     void updateLovedEditable();

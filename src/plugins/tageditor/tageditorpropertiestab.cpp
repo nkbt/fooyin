@@ -131,13 +131,8 @@ bool TagEditorPropertiesTab::commitPendingChanges()
     return true;
 }
 
-bool TagEditorPropertiesTab::prepareApply()
+bool TagEditorPropertiesTab::canSaveLoved()
 {
-    const TrackList changedTracks = commitCurrentScopeEdits();
-    if(!changedTracks.empty()) {
-        Q_EMIT tracksChanged(changedTracks);
-    }
-
     if(canSaveTrackStats(m_library, m_pendingTracks, m_pendingStats)) {
         return true;
     }
@@ -148,10 +143,18 @@ bool TagEditorPropertiesTab::prepareApply()
     return false;
 }
 
-void TagEditorPropertiesTab::apply()
+bool TagEditorPropertiesTab::apply()
 {
-    if(!prepareApply() || m_pendingTracks.empty()) {
-        return;
+    const TrackList changedTracks = commitCurrentScopeEdits();
+    if(!changedTracks.empty()) {
+        Q_EMIT tracksChanged(changedTracks);
+    }
+
+    if(!canSaveLoved()) {
+        return false;
+    }
+    if(m_pendingTracks.empty()) {
+        return true;
     }
 
     const bool updateStats = m_hasPendingStatChanges && !m_hasPendingMetadataChanges;
@@ -171,7 +174,7 @@ void TagEditorPropertiesTab::apply()
 
     if(m_settings->fileValue(DontAskAgain).toBool() || allDbOnlyTracks(m_pendingTracks)) {
         applyChanges();
-        return;
+        return true;
     }
 
     QMessageBox message;
@@ -185,12 +188,18 @@ void TagEditorPropertiesTab::apply()
     message.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
     message.setDefaultButton(QMessageBox::No);
 
-    if(message.exec() == QMessageBox::Yes) {
-        if(dontAskAgain->isChecked()) {
-            m_settings->fileSet(DontAskAgain, true);
-        }
-        applyChanges();
+    if(message.exec() != QMessageBox::Yes) {
+        return true;
     }
+    // The source can change while the confirmation runs its event loop.
+    if(!canSaveLoved()) {
+        return false;
+    }
+    if(dontAskAgain->isChecked()) {
+        m_settings->fileSet(DontAskAgain, true);
+    }
+    applyChanges();
+    return true;
 }
 
 void TagEditorPropertiesTab::updateTracks(const TrackList& tracks)
