@@ -23,6 +23,8 @@
 #include <gui/widgets/extendabletableview.h>
 #include <utils/treestatusitem.h>
 
+#include <QStringList>
+
 namespace Fooyin {
 class LibraryManager;
 struct ScanProgress;
@@ -55,7 +57,8 @@ public:
 
     void populate();
     void markForAddition(const LibraryInfo& info);
-    void processQueue();
+    //! Applies the queued changes and returns the names of libraries that could not be removed; they stay queued.
+    QStringList processQueue();
 
     void setScanProgress(const ScanProgress& progress);
     [[nodiscard]] int scanRequestId(const LibraryInfo& library) const;

@@ -2150,6 +2150,117 @@ TEST_F(UnifiedMusicLibraryTest, RemovedExternalLibraryClearsOnlyItsCommittedSour
     EXPECT_TRUE(context().library.canUpdateTrackStats(readdedTracks.front(), Track::Stat::Loved));
 }
 
+TEST_F(UnifiedMusicLibraryTest, ExternalLibraryRemovalFailureKeepsAllSourceStateForRetry)
+{
+    const QString removedPath{u"test-source://removed"_s};
+    const QString keptPath{u"test-source://kept"_s};
+    const auto removed = context().library.addExternalLibrary(removedPath, u"Removed"_s);
+    const auto kept    = context().library.addExternalLibrary(keptPath, u"Kept"_s);
+    ASSERT_TRUE(removed);
+    ASSERT_TRUE(kept);
+    context().library.setExternalLibraryReadOnlyStats(*removed, Track::Stat::Loved);
+    context().library.setExternalLibraryReadOnlyStats(*kept, Track::Stat::Loved);
+    QSignalSpy applied{&context().library, &MusicLibrary::externalLibrarySnapshotFinished};
+    context().library.applyExternalLibrarySnapshot(*removed,
+                                                   {externalTrack(removedPath + u"/listed"_s, u"Listed"_s),
+                                                    externalTrack(removedPath + u"/detached"_s, u"Detached"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    // The second snapshot detaches a record that keeps the source path and its source-owned statistics.
+    context().library.applyExternalLibrarySnapshot(*removed, {externalTrack(removedPath + u"/listed"_s, u"Listed"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    context().library.applyExternalLibrarySnapshot(*kept, {externalTrack(keptPath + u"/item"_s, u"Kept"_s)},
+                                                   QUuid::createUuid());
+    ASSERT_TRUE(waitForSignal(applied).at(2).toBool());
+    const auto byPath       = tracksByPath(context().library.libraryTracks());
+    const Track listedTrack = byPath.at(removedPath + u"/listed"_s);
+    const Track keptTrack   = byPath.at(keptPath + u"/item"_s);
+    ASSERT_NE(context().playlistHandler.createPlaylist(u"Local"_s, {listedTrack}), nullptr);
+    context().playlistHandler.savePlaylists();
+    context().library.setExternalLibraryActive(*removed, false);
+
+    TrackDatabase database;
+    database.initialise(DbConnectionProvider{context().dbPool});
+    Track detachedTrack;
+    for(const Track& track : database.getAllTracks()) {
+        if(track.filepath() == removedPath + u"/detached"_s) {
+            detachedTrack = track;
+        }
+    }
+    ASSERT_GE(detachedTrack.id(), 0);
+    ASSERT_EQ(detachedTrack.libraryId(), -1);
+    ASSERT_EQ(detachedTrack.readOnlyStats(), Track::Stats{Track::Stat::Loved});
+
+    const QString removedInactiveKey{u"ExternalLibraries/Inactive/"_s + removedPath};
+    const QString removedStatsKey{u"ExternalLibraries/ReadOnlyStats/"_s + removedPath};
+    const QString keptStatsKey{u"ExternalLibraries/ReadOnlyStats/"_s + keptPath};
+    const auto expectStored = [&database](const Track& track, int libraryId, Track::Stats readOnlyStats) {
+        Track stored{track};
+        ASSERT_TRUE(database.reloadTrack(stored));
+        EXPECT_EQ(stored.libraryId(), libraryId);
+        EXPECT_EQ(stored.readOnlyStats(), readOnlyStats);
+    };
+    const auto expectInMemory
+        = [](const MusicLibrary& library, const Track& track, int libraryId, Track::Stats readOnlyStats) {
+              const Track current = library.trackForId(track.id());
+              EXPECT_EQ(current.filepath(), track.filepath());
+              EXPECT_EQ(current.libraryId(), libraryId);
+              EXPECT_EQ(current.readOnlyStats(), readOnlyStats);
+          };
+
+    const DbConnectionProvider dbProvider{context().dbPool};
+    DbQuery failUpdate{dbProvider.db(), u"CREATE TRIGGER FailExtraProperties BEFORE UPDATE OF ExtraProperties ON "
+                                        u"Tracks BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;"_s};
+    ASSERT_TRUE(failUpdate.exec()) << failUpdate.lastError().text().toStdString();
+    QSignalSpy libraryRemoved{&context().libraryManager, &LibraryManager::libraryRemoved};
+    QSignalSpy activation{&context().library, &MusicLibrary::sourceActivationChanged};
+    EXPECT_FALSE(context().libraryManager.removeLibrary(removed->id));
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(libraryRemoved.isEmpty());
+    EXPECT_TRUE(activation.isEmpty());
+    EXPECT_TRUE(context().libraryManager.hasLibrary(removed->id));
+    EXPECT_TRUE(context().settings.fileContains(removedInactiveKey));
+    EXPECT_TRUE(context().settings.fileContains(removedStatsKey));
+    expectStored(listedTrack, removed->id, Track::Stat::Loved);
+    expectStored(detachedTrack, -1, Track::Stat::Loved);
+    expectStored(keptTrack, kept->id, Track::Stat::Loved);
+    expectInMemory(context().library, listedTrack, removed->id, Track::Stat::Loved);
+    expectInMemory(context().library, detachedTrack, -1, Track::Stat::Loved);
+    expectInMemory(context().library, keptTrack, kept->id, Track::Stat::Loved);
+    EXPECT_FALSE(context().library.isTrackSourceActive(context().library.trackForId(listedTrack.id())));
+    {
+        const LibraryManager restarted{context().dbPool, &context().settings};
+        ASSERT_TRUE(restarted.libraryInfo(removed->id));
+        EXPECT_EQ(restarted.libraryInfo(removed->id)->path, removedPath);
+        ASSERT_TRUE(restarted.libraryInfo(kept->id));
+    }
+    DbQuery dropUpdate{dbProvider.db(), u"DROP TRIGGER FailExtraProperties;"_s};
+    ASSERT_TRUE(dropUpdate.exec()) << dropUpdate.lastError().text().toStdString();
+
+    ASSERT_TRUE(context().libraryManager.removeLibrary(removed->id));
+    EXPECT_EQ(libraryRemoved.size(), 1);
+    EXPECT_EQ(activation.size(), 1);
+    EXPECT_FALSE(context().libraryManager.hasLibrary(removed->id));
+    EXPECT_FALSE(context().settings.fileContains(removedInactiveKey));
+    EXPECT_FALSE(context().settings.fileContains(removedStatsKey));
+    EXPECT_TRUE(context().settings.fileContains(keptStatsKey));
+    expectStored(listedTrack, -1, Track::Stat::None);
+    expectStored(detachedTrack, -1, Track::Stat::None);
+    expectStored(keptTrack, kept->id, Track::Stat::Loved);
+    expectInMemory(context().library, listedTrack, -1, Track::Stat::None);
+    expectInMemory(context().library, detachedTrack, -1, Track::Stat::None);
+    expectInMemory(context().library, keptTrack, kept->id, Track::Stat::Loved);
+    UnifiedMusicLibrary reloaded{&context().libraryManager, context().dbPool,   context().playlistLoader,
+                                 context().audioLoader,     context().remoteIo, &context().settings};
+    QSignalSpy loaded{&reloaded, &MusicLibrary::tracksLoaded};
+    reloaded.loadAllTracks();
+    waitForSignal(loaded);
+    expectInMemory(reloaded, listedTrack, -1, Track::Stat::None);
+    expectInMemory(reloaded, detachedTrack, -1, Track::Stat::None);
+    expectInMemory(reloaded, keptTrack, kept->id, Track::Stat::Loved);
+}
+
 TEST_F(UnifiedMusicLibraryTest, ExternalPlaylistOwnershipSurvivesUnlockAndSourceVisibilityChanges)
 {
     const auto library = context().library.addExternalLibrary(u"test-source://account"_s, u"Account"_s);

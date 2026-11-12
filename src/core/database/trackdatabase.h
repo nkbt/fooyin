@@ -29,6 +29,7 @@
 
 #include <expected>
 #include <memory>
+#include <optional>
 #include <set>
 
 namespace Fooyin {
@@ -49,8 +50,6 @@ public:
      */
     bool storeExternalSnapshot(const LibraryInfo& library, TrackList& addedTracks, TrackList& updatedTracks,
                                Track::Stats sourceStats);
-    /** Clears the source-owned statistics of @p tracks in one transaction after their external library is removed. */
-    bool clearReadOnlyStats(const TrackList& tracks);
     bool updateTracks(TrackList& tracks);
     std::expected<void, QString> writeScanBatch(TrackList& tracksToStore, TrackList& tracksToUpdate);
 
@@ -67,7 +66,10 @@ public:
 
     bool deleteTrack(int id);
     bool deleteTracks(const TrackList& tracks);
-    std::set<int> deleteLibraryTracks(int libraryId);
+    /*!
+     * Deletes the tracks of @p library that no playlist references and detaches the others. For an external library, it also clears the source-owned statistics of every stored track from that source, including tracks detached earlier. Returns the deleted track ids, or std::nullopt if a query fails. Callers provide the transaction.
+     */
+    std::optional<std::set<int>> deleteLibraryTracks(const LibraryInfo& library);
 
     void cleanupTracks();
 

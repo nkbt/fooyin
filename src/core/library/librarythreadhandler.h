@@ -90,8 +90,6 @@ public:
                                                                                          const TrackList& addedTracks,
                                                                                          const TrackList& updatedTracks,
                                                                                          Track::Stats sourceStats);
-    /** Clears the source-owned statistics of @p tracks on the database thread. Resolves to false on failure. */
-    QFuture<bool> clearReadOnlyStats(const TrackList& tracks);
 
 Q_SIGNALS:
     void progressChanged(const Fooyin::ScanProgress& progress);

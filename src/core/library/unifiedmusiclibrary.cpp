@@ -912,7 +912,6 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitRemoveLibrary(LibraryInfo librar
 
     TrackList removedTracks;
     TrackList updatedTracks;
-    TrackList sourceStatsTracks;
     TrackList remainingTracks;
 
     remainingTracks.reserve(m_tracks.size());
@@ -936,7 +935,6 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitRemoveLibrary(LibraryInfo librar
         }
         if(hasSourceStats) {
             track.setReadOnlyStats(Track::Stat::None);
-            sourceStatsTracks.push_back(track);
         }
         if(isInRemovedLibrary || hasSourceStats) {
             updatedTracks.push_back(track);
@@ -955,18 +953,6 @@ QCoro::Task<> UnifiedMusicLibraryPrivate::commitRemoveLibrary(LibraryInfo librar
     }
 
     setupLibraryWatchers();
-
-    if(sourceStatsTracks.empty()) {
-        co_return;
-    }
-
-    const QPointer lifetime{m_self};
-    const auto clearFuture = m_threadHandler.clearReadOnlyStats(sourceStatsTracks);
-    co_await qCoro(QFuture<bool>{clearFuture}).waitForFinished();
-
-    if(lifetime && (clearFuture.resultCount() == 0 || !clearFuture.result())) {
-        qCWarning(LIBRARY) << "Statistics owned by removed external library" << library.id << "remain stored";
-    }
 }
 
 bool UnifiedMusicLibraryPrivate::isRegisteredExternalLibrary(const LibraryInfo& library) const

@@ -539,8 +539,34 @@ TEST_F(RemoteIoServiceTest, KeepsAuthenticatedStreamsOutOfDiskCache)
     const QUrl url{base.resolved(QUrl{u"/audio"_s})};
     std::stop_source sourceLifetime;
 
-    for(const QByteArray& token : {QByteArray{"synthetic-account-a"}, QByteArray{"synthetic-account-b"}}) {
-        const QByteArray authorization = "Bearer " + token;
+    {
+        const QByteArray authorization{"Bearer synthetic-account-a"};
+        QNetworkRequest request{url};
+        request.setRawHeader("Authorization", authorization);
+        auto pending = service.prepareStream(request, base, sourceLifetime.get_token());
+        ASSERT_TRUE(waitFor([&]() { return pending->isFinished(); }));
+        ASSERT_TRUE(pending->isReady());
+        auto source    = pending->takeSource();
+        auto operation = std::async(std::launch::async, [&]() {
+            QByteArray data;
+            while(!source.device->atEnd()) {
+                const QByteArray chunk = source.device->read(1024);
+                if(chunk.isEmpty()) {
+                    break;
+                }
+                data += chunk;
+            }
+            return data;
+        });
+        ASSERT_TRUE(waitFor([&]() { return operation.wait_for(0ms) == std::future_status::ready; }));
+        EXPECT_EQ(operation.get(), audio);
+        source.device.reset();
+        ASSERT_FALSE(requests.empty());
+        EXPECT_TRUE(requests.back().contains(authorization));
+    }
+
+    {
+        const QByteArray authorization{"Bearer synthetic-account-b"};
         QNetworkRequest request{url};
         request.setRawHeader("Authorization", authorization);
         auto pending = service.prepareStream(request, base, sourceLifetime.get_token());

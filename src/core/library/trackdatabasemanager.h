@@ -64,7 +64,6 @@ public:
     std::optional<std::pair<TrackList, TrackList>>
     storeExternalLibrarySnapshot(const LibraryInfo& library, TrackList addedTracks, TrackList updatedTracks,
                                  Track::Stats sourceStats, std::stop_token workerToken);
-    bool clearReadOnlyStats(const TrackList& tracks, std::stop_token workerToken);
 
 Q_SIGNALS:
     void gotTracks(const Fooyin::TrackList& tracks);

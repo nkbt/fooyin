@@ -246,28 +246,6 @@ bool TrackDatabase::storeExternalSnapshot(const LibraryInfo& library, TrackList&
     return transaction.commit();
 }
 
-bool TrackDatabase::clearReadOnlyStats(const TrackList& tracks)
-{
-    DbTransaction transaction{db()};
-
-    if(!transaction) {
-        return false;
-    }
-
-    for(const Track& track : tracks) {
-        Track canonical{track};
-        if(!reloadTrack(canonical)) {
-            return false;
-        }
-        canonical.setReadOnlyStats(Track::Stat::None);
-        if(!updateTrackData(canonical)) {
-            return false;
-        }
-    }
-
-    return transaction.commit();
-}
-
 bool TrackDatabase::storeTrack(Track& track, Track::Stats sourceStats)
 {
     if(!insertTrack(track, true)) {
@@ -634,7 +612,7 @@ bool TrackDatabase::deleteTracks(const TrackList& tracks)
     return transaction.commit();
 }
 
-std::set<int> TrackDatabase::deleteLibraryTracks(int libraryId)
+std::optional<std::set<int>> TrackDatabase::deleteLibraryTracks(const LibraryInfo& library)
 {
     std::set<int> tracksToRemove;
 
@@ -644,7 +622,7 @@ std::set<int> TrackDatabase::deleteLibraryTracks(int libraryId)
 
         DbQuery query{db(), statement};
 
-        query.bindValue(u":libraryId"_s, libraryId);
+        query.bindValue(u":libraryId"_s, library.id);
 
         if(!query.exec()) {
             return {};
@@ -661,22 +639,63 @@ std::set<int> TrackDatabase::deleteLibraryTracks(int libraryId)
 
         DbQuery query{db(), statement};
 
-        query.bindValue(u":libraryId"_s, libraryId);
+        query.bindValue(u":libraryId"_s, library.id);
 
         if(!query.exec()) {
             return {};
         }
     }
 
-    static const QString statement = u"UPDATE Tracks SET LibraryID = :nonLibraryId WHERE LibraryID = :libraryId;"_s;
+    {
+        static const QString statement = u"UPDATE Tracks SET LibraryID = :nonLibraryId WHERE LibraryID = :libraryId;"_s;
 
-    DbQuery query{db(), statement};
+        DbQuery query{db(), statement};
 
-    query.bindValue(u":nonLibraryId"_s, u"-1"_s);
-    query.bindValue(u":libraryId"_s, libraryId);
+        query.bindValue(u":nonLibraryId"_s, u"-1"_s);
+        query.bindValue(u":libraryId"_s, library.id);
 
-    if(!query.exec()) {
+        if(!query.exec()) {
+            return {};
+        }
+    }
+
+    if(!Track::isVirtualPath(library.path)) {
+        return tracksToRemove;
+    }
+
+    // Tracks detached earlier also keep the source path, so the statistics owned by the source are found by path.
+    static const QString selectStatement
+        = u"SELECT TrackID, ExtraProperties FROM Tracks WHERE substr(FilePath, 1, length(:prefix)) = :prefix;"_s;
+
+    DbQuery selectQuery{db(), selectStatement};
+
+    selectQuery.bindValue(u":prefix"_s, QString{library.path + u'/'});
+
+    if(!selectQuery.exec()) {
         return {};
+    }
+
+    while(selectQuery.next()) {
+        Track track;
+        track.storeExtraProperties(selectQuery.value(1).toByteArray());
+
+        if(track.externalLibraryPath() != library.path || track.readOnlyStats() == Track::Stat::None) {
+            continue;
+        }
+
+        track.setReadOnlyStats(Track::Stat::None);
+
+        static const QString updateStatement
+            = u"UPDATE Tracks SET ExtraProperties = :extraProperties WHERE TrackID = :trackId;"_s;
+
+        DbQuery updateQuery{db(), updateStatement};
+
+        updateQuery.bindValue(u":extraProperties"_s, track.serialiseExtraProperties());
+        updateQuery.bindValue(u":trackId"_s, selectQuery.value(0).toInt());
+
+        if(!updateQuery.exec()) {
+            return {};
+        }
     }
 
     return tracksToRemove;
